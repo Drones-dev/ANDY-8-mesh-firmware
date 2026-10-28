@@ -11,8 +11,9 @@ node drops out the others reroute around it.
 | Step | State |
 |------|-------|
 | Two-board LoRa ping/pong with link-loss detection | Done (bench tested) |
-| Node IDs, HELLO beacons, neighbor table | Next |
-| Telemetry packets (fake data, then MAVLink from the flight controller) | Planned |
+| Node IDs, HELLO beacons, neighbor table | Done (hardware validation pending) |
+| Simulated structured telemetry | Done (hardware validation pending) |
+| MAVLink UART4 provider | Done (physical UART/PX4 validation pending) |
 | Multi-hop forwarding with duplicate prevention | Planned |
 | Route selection | Planned |
 | Relay failure detection and reroute (5 s target) | Planned |
@@ -31,7 +32,36 @@ firmware/
   ping-test/
     groundStationPingTest/   Ground Station sketch (sends PING, expects PONG)
     drone1/                  Drone 1 sketch (answers PONG)
+  mesh-node/                 Shared firmware for all four node profiles
+tests/
+  protocol_tests.cpp         Host tests for packet serialization and validation
+docs/
+  hardware-validation.md
 ```
+
+## Run the Phase 2 mesh firmware
+
+The original ping-test sketches are preserved as the known-working reference.
+For mesh firmware setup, per-board identity configuration, simulated telemetry
+checks, and MAVLink wiring requirements, follow
+[`docs/hardware-validation.md`](docs/hardware-validation.md).
+
+The shared firmware uses nonblocking radio receive/transmit operations and
+`millis()` scheduling. Each node broadcasts HELLO, maintains a bounded direct-
+neighbor table, and marks a neighbor lost after the configured heartbeat timeout.
+Drone profiles transmit serialized telemetry to the Ground Station profile.
+
+## Run the host protocol test
+
+From the repository root:
+
+```sh
+c++ -std=c++11 -Wall -Wextra -Werror tests/protocol_tests.cpp firmware/mesh-node/PacketProtocol.cpp -Ifirmware/mesh-node -o /tmp/andy8_protocol_tests
+/tmp/andy8_protocol_tests
+```
+
+The test checks HELLO and telemetry round trips, byte order, malformed packet
+rejection, version checks, identity validation, and telemetry field ranges.
 
 ## Run the ping test
 
