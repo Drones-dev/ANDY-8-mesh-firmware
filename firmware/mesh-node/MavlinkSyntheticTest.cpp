@@ -71,6 +71,7 @@ bool runMavlinkSyntheticTest(MavlinkTelemetryProvider& provider,
                       telemetry.latitudeE7 == 340231000 &&
                       telemetry.longitudeE7 == -845812000 &&
                       telemetry.groundSpeedCms == 340 && telemetry.armed &&
+                      telemetry.headingCentidegrees == 9000 &&
                       telemetry.flightMode == FlightMode::Auto;
   log.print("[MAVLINK SELF-TEST] ");
   log.println(passed ? "PASS" : "FAIL");

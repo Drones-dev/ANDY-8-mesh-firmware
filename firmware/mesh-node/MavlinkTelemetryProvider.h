@@ -3,6 +3,7 @@
 #include <HardwareSerial.h>
 
 #include "TelemetryProvider.h"
+#include "MavlinkTelemetryDecoder.h"
 
 /*
   PX4 MAVLink telemetry source
@@ -30,20 +31,8 @@ class MavlinkTelemetryProvider : public TelemetryProvider {
 
  private:
   HardwareSerial& serial_;       // ESP32 UART connected to flight-controller UART4.
-  NodeId nodeId_;                // Aircraft identity placed in outgoing telemetry.
-  uint32_t freshnessMs_;         // Maximum acceptable age for each field group.
   bool initialized_;             // True only after MAVLink UART setup succeeds.
-
-  // latest_ holds the newest value seen for every common telemetry field. Each
-  // group also has its own update time because MAVLink messages arrive
-  // independently; a recent HEARTBEAT does not make an old GPS fix fresh.
-  TelemetryData latest_;
-  uint32_t positionUpdatedMs_;
-  uint32_t altitudeUpdatedMs_;
-  uint32_t batteryUpdatedMs_;
-  uint32_t speedUpdatedMs_;
-  uint32_t heartbeatUpdatedMs_;
-  uint32_t healthUpdatedMs_;
+  MavlinkTelemetryDecoder decoder_;
 };
 
 }  // namespace AndyMesh

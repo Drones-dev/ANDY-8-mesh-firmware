@@ -79,6 +79,21 @@ enum class SystemHealth : uint8_t {
   Error = 3,
 };
 
+// GPS fix status describes how well the receiver has solved its position. The
+// numeric values intentionally match MAVLink GPS_FIX_TYPE, so UART and SITL
+// decoding can share one safe mapping without inventing a second meaning.
+enum class GpsFixStatus : uint8_t {
+  NoGps = 0,
+  NoFix = 1,
+  Fix2D = 2,
+  Fix3D = 3,
+  Dgps = 4,
+  RtkFloat = 5,
+  RtkFixed = 6,
+  Static = 7,
+  Ppp = 8,
+};
+
 // Each validity flag uses one bit. A set bit means that field is fresh and may
 // be displayed. This is especially important for MAVLink: messages arrive at
 // different times, so GPS may be current while battery data is stale.
@@ -90,6 +105,8 @@ enum TelemetryValidity : uint16_t {
   TelemetryValidFlightMode = 1U << 4,
   TelemetryValidArmedState = 1U << 5,
   TelemetryValidSystemHealth = 1U << 6,
+  TelemetryValidHeading = 1U << 7,
+  TelemetryValidGpsFix = 1U << 8,
 };
 
 // The mask contains every validity bit understood by protocol version 1. It is
@@ -98,7 +115,8 @@ enum TelemetryValidity : uint16_t {
 constexpr uint16_t kKnownTelemetryValidityMask =
     TelemetryValidPosition | TelemetryValidAltitude | TelemetryValidBattery |
     TelemetryValidGroundSpeed | TelemetryValidFlightMode |
-    TelemetryValidArmedState | TelemetryValidSystemHealth;
+    TelemetryValidArmedState | TelemetryValidSystemHealth |
+    TelemetryValidHeading | TelemetryValidGpsFix;
 
 inline bool isValidNodeId(NodeId id) {
   return id <= kHighestSupportedNodeId;
@@ -160,6 +178,21 @@ inline const char* systemHealthName(SystemHealth health) {
       return "ERROR";
     case SystemHealth::Unknown:
       return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* gpsFixName(GpsFixStatus fix) {
+  switch (fix) {
+    case GpsFixStatus::NoGps: return "NO GPS";
+    case GpsFixStatus::NoFix: return "NO FIX";
+    case GpsFixStatus::Fix2D: return "2D";
+    case GpsFixStatus::Fix3D: return "3D";
+    case GpsFixStatus::Dgps: return "DGPS";
+    case GpsFixStatus::RtkFloat: return "RTK FLOAT";
+    case GpsFixStatus::RtkFixed: return "RTK FIXED";
+    case GpsFixStatus::Static: return "STATIC";
+    case GpsFixStatus::Ppp: return "PPP";
   }
   return "UNKNOWN";
 }

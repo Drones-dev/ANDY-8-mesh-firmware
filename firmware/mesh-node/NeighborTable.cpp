@@ -56,15 +56,14 @@ NeighborEntry* NeighborTable::allocate(NodeId nodeId) {
   return nullptr;
 }
 
-void NeighborTable::observeHello(const HelloPayload& hello,
-                                 uint32_t receivedAtMs,
-                                 float rssiDbm,
-                                 float snrDb,
-                                 Print& log) {
+NeighborEvent NeighborTable::observeHello(const HelloPayload& hello,
+                                          uint32_t receivedAtMs,
+                                          float rssiDbm,
+                                          float snrDb) {
   // A radio should not add itself as its own neighbor, even if an echoed packet
   // is received during unusual bench wiring or testing.
   if (hello.nodeId == localNodeId_) {
-    return;
+    return NeighborEvent::None;
   }
 
   NeighborEntry* entry = findMutable(hello.nodeId);
@@ -74,17 +73,10 @@ void NeighborTable::observeHello(const HelloPayload& hello,
     // existing entries rather than overwriting an arbitrary known neighbor.
     entry = allocate(hello.nodeId);
     if (entry == nullptr) {
-      log.print("[Node ");
-      log.print(localNodeId_);
-      log.println("] Neighbor table full; HELLO ignored");
-      return;
+      return NeighborEvent::TableFull;
     }
     entry->helloPacketsReceived = 0;
     entry->status = NeighborStatus::Lost;
-    log.print("[Node ");
-    log.print(localNodeId_);
-    log.print("] Discovered Node ");
-    log.println(hello.nodeId);
   }
 
   // Remember the old status before refreshing it so recovery can be logged.
@@ -98,30 +90,14 @@ void NeighborTable::observeHello(const HelloPayload& hello,
   entry->status = NeighborStatus::Active;
   ++entry->helloPacketsReceived;
 
-  log.print("[Node ");
-  log.print(localNodeId_);
-  log.print("] HELLO received from Node ");
-  log.println(hello.nodeId);
-  log.print("[Node ");
-  log.print(localNodeId_);
-  log.print("] Neighbor ");
-  log.print(hello.nodeId);
-  log.print(" RSSI: ");
-  log.print(rssiDbm, 1);
-  log.print(" dBm, SNR: ");
-  log.print(snrDb, 1);
-  log.println(" dB");
-
-  if (recovered) {
-    log.print("[Node ");
-    log.print(localNodeId_);
-    log.print("] Node ");
-    log.print(hello.nodeId);
-    log.println(" is ACTIVE again");
-  }
+  return isNew ? NeighborEvent::Discovered
+               : (recovered ? NeighborEvent::Recovered : NeighborEvent::None);
 }
 
-void NeighborTable::updateTimeouts(uint32_t nowMs, Print& log) {
+size_t NeighborTable::updateTimeouts(uint32_t nowMs,
+                                     NodeId* lostNodes,
+                                     size_t capacity) {
+  size_t lostCount = 0;
   // This runs every main-loop pass but prints only on an ACTIVE -> LOST change.
   // Keeping LOST entries prevents repeated warnings and preserves diagnostics.
   for (size_t i = 0; i < kMaxNeighbors; ++i) {
@@ -134,43 +110,17 @@ void NeighborTable::updateTimeouts(uint32_t nowMs, Print& log) {
       continue;
     }
     entry.status = NeighborStatus::Lost;
-    log.print("[Node ");
-    log.print(localNodeId_);
-    log.print("] WARNING: Node ");
-    log.print(entry.nodeId);
-    log.println(" heartbeat timeout");
-    log.print("[Node ");
-    log.print(localNodeId_);
-    log.print("] Node ");
-    log.print(entry.nodeId);
-    log.println(" marked LOST");
+    if (lostNodes != nullptr && lostCount < capacity) {
+      lostNodes[lostCount] = entry.nodeId;
+    }
+    ++lostCount;
   }
+  return lostCount;
 }
 
-void NeighborTable::print(Print& log) const {
-  // The table is formatted for a 115200-baud Serial Monitor. HELLO count helps
-  // distinguish a stable link from a newly discovered or intermittent one.
-  log.print("[Node ");
-  log.print(localNodeId_);
-  log.println("] Neighbor Table");
-  log.println("ID | Role    | RSSI   | SNR  | Status | HELLOs");
-  for (size_t i = 0; i < kMaxNeighbors; ++i) {
-    const NeighborEntry& entry = entries_[i];
-    if (!entry.occupied) {
-      continue;
-    }
-    log.print(entry.nodeId);
-    log.print("  | ");
-    log.print(nodeRoleName(entry.role));
-    log.print(" | ");
-    log.print(entry.rssiDbm, 1);
-    log.print(" | ");
-    log.print(entry.snrDb, 1);
-    log.print(" | ");
-    log.print(entry.status == NeighborStatus::Active ? "ACTIVE" : "LOST");
-    log.print(" | ");
-    log.println(entry.helloPacketsReceived);
-  }
+const NeighborEntry* NeighborTable::entryAt(size_t index) const {
+  return index < kMaxNeighbors && entries_[index].occupied ? &entries_[index]
+                                                            : nullptr;
 }
 
 size_t NeighborTable::count() const {

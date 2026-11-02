@@ -5,6 +5,7 @@
 
 #include "NodeConfig.h"
 #include "PacketProtocol.h"
+#include "PacketTransport.h"
 
 /*
   Nonblocking SX1262 radio control
@@ -20,14 +21,7 @@ namespace AndyMesh {
 // The largest valid protocol packet has a fixed local buffer. RSSI is received
 // signal strength in dBm (closer to zero is stronger), and SNR is signal-to-noise
 // ratio in dB (higher is generally cleaner).
-struct ReceivedRadioPacket {
-  uint8_t data[kMaxPacketSize];
-  size_t length;
-  float rssiDbm;
-  float snrDb;
-};
-
-class RadioManager {
+class RadioManager : public PacketTransport {
  public:
   RadioManager();
 
@@ -35,9 +29,9 @@ class RadioManager {
   // whether an interrupt reported completed RX/TX work. send starts a transmit
   // only when the radio is ready.
   bool begin(const RadioConfig& config, Print& log);
-  bool poll(ReceivedRadioPacket& packet);
-  bool send(const uint8_t* data, size_t length);
-  bool readyToSend() const;
+  bool poll(TransportPacket& packet) override;
+  bool send(const uint8_t* data, size_t length) override;
+  bool readyToSend() const override;
   int16_t lastError() const;
 
  private:

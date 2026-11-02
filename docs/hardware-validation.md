@@ -87,6 +87,50 @@ are transmitted.
 
 The 13-byte common header contains two magic bytes, protocol version, packet
 type, source ID, destination ID, 16-bit sequence number, 32-bit uptime, and
-8-bit payload length. HELLO is 7 bytes; telemetry is 29 bytes. RadioLib's LoRa
+8-bit payload length. HELLO is 7 bytes; telemetry is 32 bytes (including heading
+in centidegrees and GPS fix status). RadioLib's LoRa
 CRC protects each over-the-air frame.
+
+See [hardware-compatibility.md](hardware-compatibility.md) for verified board,
+motor, GPS/compass, wiring, PX4 target, and remaining validation details.
+
+## PX4 SIH and mesh simulation
+
+The PC executable is ordinary C++ software; it does not try to run Arduino code
+inside PX4. It reuses the packet serializer, telemetry format, direct-neighbor
+table, heartbeat timeout, and MAVLink decoder used by hardware mode.
+
+```sh
+./scripts/setup-simulation.sh
+./scripts/start-px4-sih.sh /path/to/PX4-Autopilot
+# in another terminal
+./build/andy_mesh_sim
+```
+
+PX4's official SIH command is `make px4_sitl_sih sihsim_quadx`; its official
+multi-instance launcher command is
+`./Tools/simulation/sitl_multiple_run.sh 3 sihsim_quadx px4_sitl_sih`.
+Instances 0-2 send offboard MAVLink to UDP ports 14540-14542, which map to mesh
+nodes 1-3. See <https://docs.px4.io/main/en/sim_sih/>.
+
+The default radio topology is `0 <-> 1 <-> 2 <-> 3`, with different RSSI, SNR,
+and latency values on each direct link. These values are test inputs, not an
+SX1262 propagation model. `SimulatedRadioNetwork` also supports per-link enable,
+loss percentage, endpoint disconnect, and restoration. The automated test
+verifies discovery, restricted reachability, timeout, and recovery.
+
+Useful controls are `--loss-percent 10`, `--disable-link 1 2`,
+`--disconnect-node 2`, and `--failure-demo` (disconnect node 2 at five seconds,
+restore it at twelve seconds). `--duration-ms` makes scripted runs terminate.
+
+Important limitation: multi-hop forwarding is not implemented. Consequently,
+node 1 telemetry can reach ground node 0 in the line topology, while nodes 2 and
+3 cannot yet relay telemetry through intermediate nodes. HELLO packets remain
+strictly direct-neighbor observations. Do not interpret successful neighbor
+discovery as end-to-end routing.
+
+PX4 recommends Ubuntu for development; SIH is the lightest headless option.
+WSL2 can build/run PX4 simulation, but host networking/firewall configuration
+may be needed and USB flashing is a separate concern. Official setup:
+<https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu>.
 

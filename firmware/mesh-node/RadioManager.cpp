@@ -78,7 +78,7 @@ bool RadioManager::startReceiving() {
   return true;
 }
 
-bool RadioManager::poll(ReceivedRadioPacket& packet) {
+bool RadioManager::poll(TransportPacket& packet) {
   // Most loop iterations have no radio event. Returning immediately keeps this
   // check inexpensive and leaves time for HELLO, timeout, and MAVLink work.
   if (!operationDone_) {
@@ -103,7 +103,7 @@ bool RadioManager::poll(ReceivedRadioPacket& packet) {
   }
 
   const size_t packetLength = radio_.getPacketLength();
-  // Never read beyond ReceivedRadioPacket::data. A zero or oversized length is
+  // Never read beyond TransportPacket::data. A zero or oversized length is
   // not a valid Phase 2 frame, so discard it and resume listening.
   if (packetLength == 0 || packetLength > kMaxPacketSize) {
     reportError("invalid received length", RADIOLIB_ERR_PACKET_TOO_LONG);

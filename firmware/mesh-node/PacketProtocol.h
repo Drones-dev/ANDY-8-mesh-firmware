@@ -28,7 +28,7 @@ constexpr size_t kPacketHeaderSize = 13;
 constexpr size_t kMaxPayloadSize = 64;
 constexpr size_t kMaxPacketSize = kPacketHeaderSize + kMaxPayloadSize;
 constexpr size_t kHelloPayloadSize = 7;
-constexpr size_t kTelemetryPayloadSize = 29;
+constexpr size_t kTelemetryPayloadSize = 32;
 
 // Every packet begins with this information. Source and destination identify
 // who sent the packet and who should process it. The sequence number helps track
@@ -69,6 +69,8 @@ struct TelemetryData {
   uint8_t batteryPercent;
   uint16_t batteryMillivolts;
   uint16_t groundSpeedCms;
+  uint16_t headingCentidegrees;  // 0-35999 means 0.00-359.99 degrees.
+  GpsFixStatus gpsFixStatus;
   FlightMode flightMode;
   bool armed;
   SystemHealth systemHealth;

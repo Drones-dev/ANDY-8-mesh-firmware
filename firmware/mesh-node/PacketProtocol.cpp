@@ -222,6 +222,9 @@ bool isValidTelemetry(const TelemetryData& telemetry) {
          telemetry.latitudeE7 <= 900000000 &&
          telemetry.longitudeE7 >= -1800000000 &&
          telemetry.longitudeE7 <= 1800000000 && batteryValid &&
+         telemetry.headingCentidegrees < 36000 &&
+         static_cast<uint8_t>(telemetry.gpsFixStatus) <=
+             static_cast<uint8_t>(GpsFixStatus::Ppp) &&
          static_cast<uint8_t>(telemetry.flightMode) <=
              static_cast<uint8_t>(FlightMode::Land) &&
          static_cast<uint8_t>(telemetry.systemHealth) <=
@@ -242,7 +245,8 @@ ProtocolError encodeTelemetryPayload(const TelemetryData& telemetry,
     return ProtocolError::InvalidField;
   }
 
-  // Telemetry byte layout (29 bytes total):
+  // Telemetry byte layout (32 bytes total). Heading is stored in hundredths of
+  // a degree, and GPS fix uses the compact status defined in MeshTypes.h:
   //   origin ID       1 byte
   //   sequence        2 bytes
   //   timestamp       4 bytes
@@ -263,10 +267,12 @@ ProtocolError encodeTelemetryPayload(const TelemetryData& telemetry,
   output[19] = telemetry.batteryPercent;
   writeU16(output + 20, telemetry.batteryMillivolts);
   writeU16(output + 22, telemetry.groundSpeedCms);
-  output[24] = static_cast<uint8_t>(telemetry.flightMode);
-  output[25] = telemetry.armed ? 1 : 0;
-  output[26] = static_cast<uint8_t>(telemetry.systemHealth);
-  writeU16(output + 27, telemetry.validityFlags);
+  writeU16(output + 24, telemetry.headingCentidegrees);
+  output[26] = static_cast<uint8_t>(telemetry.gpsFixStatus);
+  output[27] = static_cast<uint8_t>(telemetry.flightMode);
+  output[28] = telemetry.armed ? 1 : 0;
+  output[29] = static_cast<uint8_t>(telemetry.systemHealth);
+  writeU16(output + 30, telemetry.validityFlags);
   return ProtocolError::None;
 }
 
@@ -291,14 +297,16 @@ ProtocolError decodeTelemetryPayload(const uint8_t* payload,
   telemetry.batteryPercent = payload[19];
   telemetry.batteryMillivolts = readU16(payload + 20);
   telemetry.groundSpeedCms = readU16(payload + 22);
-  telemetry.flightMode = static_cast<FlightMode>(payload[24]);
-  telemetry.armed = payload[25] != 0;
-  telemetry.systemHealth = static_cast<SystemHealth>(payload[26]);
-  telemetry.validityFlags = readU16(payload + 27);
+  telemetry.headingCentidegrees = readU16(payload + 24);
+  telemetry.gpsFixStatus = static_cast<GpsFixStatus>(payload[26]);
+  telemetry.flightMode = static_cast<FlightMode>(payload[27]);
+  telemetry.armed = payload[28] != 0;
+  telemetry.systemHealth = static_cast<SystemHealth>(payload[29]);
+  telemetry.validityFlags = readU16(payload + 30);
 
   // The armed byte is deliberately restricted to 0 or 1. Values such as 42
   // most likely indicate packet corruption or a protocol mismatch.
-  if (payload[25] > 1 || !isValidTelemetry(telemetry)) {
+  if (payload[28] > 1 || !isValidTelemetry(telemetry)) {
     return ProtocolError::InvalidField;
   }
   return ProtocolError::None;

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Arduino.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "PacketProtocol.h"
@@ -31,6 +31,8 @@ struct NeighborEntry {
   bool occupied;                    // False means this array slot is unused.
 };
 
+enum class NeighborEvent : uint8_t { None, Discovered, Recovered, Lost, TableFull };
+
 class NeighborTable {
  public:
   NeighborTable();
@@ -39,15 +41,14 @@ class NeighborTable {
   // lastSeenMs with the configured heartbeat limit. print produces a readable
   // table without exposing internal storage to the main sketch.
   void begin(NodeId localNodeId, uint32_t timeoutMs);
-  void observeHello(const HelloPayload& hello,
-                    uint32_t receivedAtMs,
-                    float rssiDbm,
-                    float snrDb,
-                    Print& log);
-  void updateTimeouts(uint32_t nowMs, Print& log);
-  void print(Print& log) const;
+  NeighborEvent observeHello(const HelloPayload& hello,
+                             uint32_t receivedAtMs,
+                             float rssiDbm,
+                             float snrDb);
+  size_t updateTimeouts(uint32_t nowMs, NodeId* lostNodes, size_t capacity);
   size_t count() const;
   const NeighborEntry* find(NodeId nodeId) const;
+  const NeighborEntry* entryAt(size_t index) const;
 
  private:
   // Mutable lookup is used when an entry will be updated; the const public

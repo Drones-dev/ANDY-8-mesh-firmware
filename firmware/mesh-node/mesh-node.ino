@@ -215,6 +215,15 @@ void printTelemetry(const TelemetryData& telemetry) {
   } else {
     Serial.println("N/A (stale or unavailable)");
   }
+  Serial.print("Heading: ");
+  if ((telemetry.validityFlags & TelemetryValidHeading) != 0) {
+    Serial.print(static_cast<float>(telemetry.headingCentidegrees) / 100.0F, 2);
+    Serial.println(" degrees");
+  } else Serial.println("N/A (stale or unavailable)");
+  Serial.print("GPS fix: ");
+  Serial.println((telemetry.validityFlags & TelemetryValidGpsFix) != 0
+                     ? gpsFixName(telemetry.gpsFixStatus)
+                     : "N/A (stale or unavailable)");
   Serial.print("Mode: ");
   Serial.println((telemetry.validityFlags & TelemetryValidFlightMode) != 0
                      ? flightModeName(telemetry.flightMode)
@@ -234,7 +243,7 @@ void printTelemetry(const TelemetryData& telemetry) {
 }
 
 void handleHello(const DecodedPacket& packet,
-                 const ReceivedRadioPacket& radioPacket,
+                 const TransportPacket& radioPacket,
                  uint32_t nowMs) {
   // The outer packet is already valid. Now validate the HELLO-specific seven
   // bytes and require its repeated node ID to match the header source ID. The
@@ -249,8 +258,28 @@ void handleHello(const DecodedPacket& packet,
   }
   // Only an actually received HELLO reaches this call, so RSSI/SNR describe a
   // direct neighbor rather than a node learned through another relay.
-  neighborTable.observeHello(hello, nowMs, radioPacket.rssiDbm,
-                             radioPacket.snrDb, Serial);
+  const NeighborEvent event = neighborTable.observeHello(
+      hello, nowMs, radioPacket.rssiDbm, radioPacket.snrDb);
+  Serial.print("[Node "); Serial.print(nodeConfig.nodeId);
+  Serial.print("] HELLO from Node "); Serial.print(hello.nodeId);
+  Serial.print(" RSSI "); Serial.print(radioPacket.rssiDbm, 1);
+  Serial.print(" dBm, SNR "); Serial.print(radioPacket.snrDb, 1); Serial.println(" dB");
+  if (event == NeighborEvent::Discovered) Serial.println("[MESH] New direct neighbor discovered");
+  if (event == NeighborEvent::Recovered) Serial.println("[MESH] Neighbor is ACTIVE again");
+  if (event == NeighborEvent::TableFull) Serial.println("[MESH] Neighbor table full");
+}
+
+void printNeighborTable() {
+  Serial.println("ID | Role | RSSI | SNR | Status | HELLOs");
+  for (size_t i = 0; i < kMaxNeighbors; ++i) {
+    const NeighborEntry* entry = neighborTable.entryAt(i);
+    if (entry == nullptr) continue;
+    Serial.print(entry->nodeId); Serial.print(" | "); Serial.print(nodeRoleName(entry->role));
+    Serial.print(" | "); Serial.print(entry->rssiDbm, 1); Serial.print(" | ");
+    Serial.print(entry->snrDb, 1); Serial.print(" | ");
+    Serial.print(entry->status == NeighborStatus::Active ? "ACTIVE" : "LOST");
+    Serial.print(" | "); Serial.println(entry->helloPacketsReceived);
+  }
 }
 
 void handleTelemetry(const DecodedPacket& packet) {
@@ -271,7 +300,7 @@ void handleTelemetry(const DecodedPacket& packet) {
   }
 }
 
-void handleReceivedPacket(const ReceivedRadioPacket& radioPacket,
+void handleReceivedPacket(const TransportPacket& radioPacket,
                           uint32_t nowMs) {
   // First validate magic bytes, version, IDs, packet type, and exact length.
   // Payload-specific code runs only after this common safety gate succeeds.
@@ -367,18 +396,23 @@ void loop() {
   telemetryManager.update(nowMs);
 
   // poll returns true only when a complete LoRa packet was read successfully.
-  ReceivedRadioPacket radioPacket;
+  TransportPacket radioPacket;
   if (radioManager.poll(radioPacket)) {
     handleReceivedPacket(radioPacket, nowMs);
   }
 
-  neighborTable.updateTimeouts(nowMs, Serial);
+  NodeId lostNodes[kMaxNeighbors];
+  const size_t lostCount = neighborTable.updateTimeouts(nowMs, lostNodes, kMaxNeighbors);
+  for (size_t i = 0; i < lostCount && i < kMaxNeighbors; ++i) {
+    Serial.print("[MESH] WARNING: Node "); Serial.print(lostNodes[i]);
+    Serial.println(" heartbeat timeout; marked LOST");
+  }
 
   // Full table output is diagnostic only. count avoids printing an empty table,
   // and the timer prevents Serial output from overwhelming normal loop work.
   if (neighborTable.count() > 0 &&
       timeReached(nowMs, nextNeighborTablePrintMs)) {
-    neighborTable.print(Serial);
+    printNeighborTable();
     nextNeighborTablePrintMs = nowMs + nodeConfig.neighborTableIntervalMs;
   }
 

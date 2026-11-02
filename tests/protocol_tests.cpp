@@ -51,6 +51,8 @@ void testTelemetryRoundTrip() {
                                87,
                                15250,
                                340,
+                               12345,
+                               GpsFixStatus::Fix3D,
                                FlightMode::Auto,
                                true,
                                SystemHealth::Ok,
@@ -71,6 +73,8 @@ void testTelemetryRoundTrip() {
   assert(result.batteryPercent == original.batteryPercent);
   assert(result.batteryMillivolts == original.batteryMillivolts);
   assert(result.groundSpeedCms == original.groundSpeedCms);
+  assert(result.headingCentidegrees == original.headingCentidegrees);
+  assert(result.gpsFixStatus == original.gpsFixStatus);
   assert(result.flightMode == original.flightMode);
   assert(result.armed == original.armed);
   assert(result.systemHealth == original.systemHealth);
@@ -117,6 +121,8 @@ void testInvalidTelemetryIsRejected() {
                           101,
                           0,
                           0,
+                          0,
+                          GpsFixStatus::NoGps,
                           FlightMode::Unknown,
                           false,
                           SystemHealth::Unknown,

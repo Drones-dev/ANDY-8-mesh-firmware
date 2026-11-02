@@ -67,6 +67,9 @@ bool SimulatedTelemetryProvider::read(uint32_t nowMs,
       static_cast<uint16_t>(16800U - static_cast<uint16_t>(batteryDrop) * 65U);
   telemetry.groundSpeedCms =
       static_cast<uint16_t>(250U + (elapsedSeconds % 30U) * 8U);
+  telemetry.headingCentidegrees =
+      static_cast<uint16_t>((elapsedSeconds * 150U) % 36000U);
+  telemetry.gpsFixStatus = GpsFixStatus::Fix3D;
   // Alternate AUTO and STABILIZED every 30 seconds so mode decoding is visible
   // during a bench test instead of remaining a single constant value forever.
   telemetry.flightMode =
