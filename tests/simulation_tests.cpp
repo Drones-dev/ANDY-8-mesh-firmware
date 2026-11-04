@@ -6,7 +6,8 @@
 using namespace AndyMesh;
 static void sendHello(SimulatedRadioEndpoint& tx, NodeId id, uint32_t now) {
   HelloPayload h{id, id == 0 ? NodeRole::GroundStation : NodeRole::Drone,
-                 kProtocolVersion, now};
+                 kProtocolVersion, now, static_cast<uint8_t>(id == 0 ? 0 : 255),
+                 255};
   uint8_t payload[kHelloPayloadSize], packet[kMaxPacketSize];
   size_t n = 0;
   assert(encodeHelloPayload(h, payload, sizeof payload) == ProtocolError::None);

@@ -29,6 +29,8 @@ struct NeighborEntry {
   NeighborStatus status;            // ACTIVE while heartbeat is recent.
   uint32_t helloPacketsReceived;    // Running diagnostic count.
   bool occupied;                    // False means this array slot is unused.
+  uint8_t hopsToGround;             // Neighbor's hop count to the Ground Station.
+  NodeId nextHop;                   // Neighbor's current next hop.
 };
 
 enum class NeighborEvent : uint8_t { None, Discovered, Recovered, Lost, TableFull };

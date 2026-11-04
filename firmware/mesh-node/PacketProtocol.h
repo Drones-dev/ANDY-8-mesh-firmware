@@ -27,7 +27,8 @@ constexpr uint8_t kPacketMagic1 = 0x52;
 constexpr size_t kPacketHeaderSize = 13;
 constexpr size_t kMaxPayloadSize = 64;
 constexpr size_t kMaxPacketSize = kPacketHeaderSize + kMaxPayloadSize;
-constexpr size_t kHelloPayloadSize = 7;
+// Includes the two routing bytes (hops to ground, next hop).
+constexpr size_t kHelloPayloadSize = 9;
 constexpr size_t kTelemetryPayloadSize = 32;
 
 // Every packet begins with this information. Source and destination identify
@@ -51,6 +52,12 @@ struct HelloPayload {
   NodeRole role;
   uint8_t protocolVersion;
   uint32_t uptimeMs;
+  // Routing fields used by Router:
+  //   hopsToGround - sender's hop count to the Ground Station (0 = Ground
+  //                  Station, 255 = no route).
+  //   nextHop      - neighbor the sender currently relays through (255 = none).
+  uint8_t hopsToGround;
+  NodeId nextHop;
 };
 
 // TelemetryData is the common format used by both simulated and MAVLink input.

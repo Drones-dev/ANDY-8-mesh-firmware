@@ -13,7 +13,9 @@ NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(3000) {
                                 0.0F,
                                 NeighborStatus::Lost,
                                 0,
-                                false};
+                                false,
+                                255,   // hopsToGround: no route
+                                255};  // nextHop: none
   }
 }
 
@@ -88,6 +90,8 @@ NeighborEvent NeighborTable::observeHello(const HelloPayload& hello,
   entry->rssiDbm = rssiDbm;
   entry->snrDb = snrDb;
   entry->status = NeighborStatus::Active;
+  entry->hopsToGround = hello.hopsToGround;
+  entry->nextHop = hello.nextHop;
   ++entry->helloPacketsReceived;
 
   return isNew ? NeighborEvent::Discovered

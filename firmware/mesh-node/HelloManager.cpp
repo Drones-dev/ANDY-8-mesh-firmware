@@ -36,7 +36,8 @@ bool HelloManager::due(uint32_t nowMs) const {
 HelloPayload HelloManager::makePayload(uint32_t nowMs) const {
   // nowMs is the sender's uptime, not wall-clock time. All Arduino nodes have a
   // local millis() counter even when no GPS or real-time clock is available.
-  return HelloPayload{nodeId_, role_, protocolVersion_, nowMs};
+  // Routing fields default to "no route"; filled from Router before transmit.
+  return HelloPayload{nodeId_, role_, protocolVersion_, nowMs, 255, 255};
 }
 
 void HelloManager::markSent(uint32_t nowMs) {

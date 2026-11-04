@@ -94,7 +94,8 @@ table, heartbeat timeout, and MAVLink decoder used by hardware mode.
 
 PX4's official SIH command is `make px4_sitl_sih sihsim_quadx`; its official
 multi-instance launcher command is
-`./Tools/simulation/sitl_multiple_run.sh 3 sihsim_quadx px4_sitl_sih`.
+`./Tools/simulation/sitl_multiple_run.sh 3 sihsim_quadx px4_sitl_default`
+(the standard `make px4_sitl` build already includes SIH).
 Instances 0-2 send offboard MAVLink to UDP ports 14540-14542, which map to mesh
 nodes 1-3. See <https://docs.px4.io/main/en/sim_sih/>.
 
@@ -108,11 +109,11 @@ Useful controls are `--loss-percent 10`, `--disable-link 1 2`,
 `--disconnect-node 2`, and `--failure-demo` (disconnect node 2 at five seconds,
 restore it at twelve seconds). `--duration-ms` makes scripted runs terminate.
 
-Important limitation: multi-hop forwarding is not implemented. Consequently,
-node 1 telemetry can reach ground node 0 in the line topology, while nodes 2 and
-3 cannot yet relay telemetry through intermediate nodes. HELLO packets remain
-strictly direct-neighbor observations. Do not interpret successful neighbor
-discovery as end-to-end routing.
+Multi-hop relaying: each HELLO carries the sender's hop count to the Ground
+Station and its next hop. Each drone sends telemetry to its best neighbor
+(fewest hops, then strongest RSSI), and relays other drones' telemetry the same
+way until it reaches node 0. Use `--topology diamond --failure-demo` to see a
+reroute. The simulated radio links are fixed test inputs, not an RF model.
 
 PX4 recommends Ubuntu for development; SIH is the lightest headless option.
 WSL2 can build/run PX4 simulation, but host networking/firewall configuration

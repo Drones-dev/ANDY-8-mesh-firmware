@@ -4,7 +4,8 @@ Firmware for the **ANDY 8: RED** distributed mesh telemetry and node hand-off pr
 (CS4850 Senior Project, Kennesaw State University).
 
 Each drone carries a small LoRa radio node. Direct-neighbor discovery and
-telemetry are implemented; packet relaying and automatic rerouting are planned.
+telemetry, multi-hop relaying, route selection, and automatic rerouting are
+implemented (tested in PC simulation; hardware validation pending).
 
 ## Status
 
@@ -17,9 +18,9 @@ telemetry are implemented; packet relaying and automatic rerouting are planned.
 | Shared UART/UDP MAVLink decoder with heading and GPS fix | Done |
 | PC simulated radio and four-node line-topology tests | Done |
 | Live three-vehicle PX4 SIH integration | Adapter built; live PX4 run pending |
-| Multi-hop forwarding with duplicate prevention | Planned |
-| Route selection | Planned |
-| Relay failure detection and reroute (5 s target) | Planned |
+| Multi-hop forwarding with duplicate prevention | Done (simulation tested; hardware validation pending) |
+| Route selection (fewest hops, then strongest signal) | Done (simulation tested) |
+| Relay failure detection and reroute (5 s target) | Done (simulation tested, ~3 s) |
 
 ## Hardware
 
@@ -84,11 +85,22 @@ neighbor discovery, heartbeat timeout, and reconnection.
 ./build/andy_mesh_sim --duration-ms 10000
 ```
 
-For three live PX4 SIH vehicles and the verified port mapping, follow
-[`docs/hardware-validation.md`](docs/hardware-validation.md). The current line
-topology intentionally has no direct 0-to-2, 0-to-3, or 1-to-3 links. Since
-multi-hop forwarding is not implemented, only directly reachable telemetry is
-expected at the ground station.
+Two radio layouts are built in:
+
+- `line` (default): Ground - Drone 1 - Drone 2 - Drone 3. Drone 3's telemetry
+  hops through Drone 2 and Drone 1. There is no backup path.
+- `diamond`: Drones 1 and 2 both reach the Ground Station; Drone 3 reaches
+  both drones but not the Ground Station. Drone 3 relays through Drone 2
+  (stronger signal) and reroutes through Drone 1 if Drone 2 is lost.
+
+Reroute demo (Node 2 is disconnected at 5 s and restored at 12 s):
+
+```sh
+./build/andy_mesh_sim --topology diamond --failure-demo
+```
+
+Telemetry lines appear only when PX4 is running and sending MAVLink. For three
+live PX4 SIH vehicles, follow [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ## Run the ping test
 
