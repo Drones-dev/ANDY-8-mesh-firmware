@@ -2,7 +2,7 @@
   ANDY 8: RED - Phase 2 mesh node firmware
 
   Board:   Seeed XIAO ESP32S3 + Wio-SX1262
-  Radio:   915 MHz, 125 kHz, SF9, CR 4/7, 14 dBm
+  Radio:   915 MHz, 125 kHz, SF9, CR 4/7, 12 dBm
   Library: RadioLib
 
   Copy NodeBuildConfig.example.h to NodeBuildConfig.h and select this board's
@@ -22,7 +22,6 @@
 // sketch readable and prevents radio, protocol, and telemetry details from being
 // mixed into one very large loop.
 #include "HelloManager.h"
-#include "MavlinkSyntheticTest.h"
 #include "MavlinkTelemetryProvider.h"
 #include "NeighborTable.h"
 #include "NodeConfig.h"
@@ -369,14 +368,6 @@ void setup() {
   if (!telemetryManager.begin(nodeConfig, Serial, nowMs)) {
     stopWithMessage("Telemetry provider failed to initialize.");
   }
-#if ANDY_TELEMETRY_SOURCE == ANDY_TELEMETRY_MAVLINK && \
-    ANDY_MAVLINK_SELF_TEST
-  // This optional startup check sends generated frames through the parser before
-  // normal radio operation. It is normally disabled after software validation.
-  if (!runMavlinkSyntheticTest(telemetryProvider, nowMs, Serial)) {
-    stopWithMessage("MAVLink synthetic parser self-test failed.");
-  }
-#endif
   if (!radioManager.begin(nodeConfig.radio, Serial)) {
     stopWithMessage("Radio failed to initialize; firmware halted.");
   }

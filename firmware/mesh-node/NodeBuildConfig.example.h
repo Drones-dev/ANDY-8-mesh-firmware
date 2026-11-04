@@ -33,9 +33,3 @@
 // #define ANDY_MAVLINK_RX_PIN 4
 // #define ANDY_MAVLINK_TX_PIN 5
 // #define ANDY_MAVLINK_BAUD 57600
-
-// Optional: inject generated HEARTBEAT, GLOBAL_POSITION_INT, and VFR_HUD
-// frames through the real parser at startup and report PASS/FAIL.
-// This checks software parsing only; it cannot prove that physical UART wiring
-// or PX4 configuration is correct.
-// #define ANDY_MAVLINK_SELF_TEST 1

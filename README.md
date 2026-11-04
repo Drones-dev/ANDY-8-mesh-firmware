@@ -44,7 +44,6 @@ tests/
   simulation_tests.cpp       Simulated links, discovery, timeout, and recovery
 docs/
   hardware-validation.md
-  hardware-compatibility.md
 simulation/                    PC simulated-radio implementation and SITL adapter
 scripts/                       Reproducible simulator/PX4 SIH launch helpers
 build/                         Generated locally by CMake; never committed
@@ -115,5 +114,7 @@ Unplug Drone 1 and after three missed pings it prints `*** NO SIGNAL from Drone 
 - Commit messages: start with what changed, e.g. `Add neighbor table to node sketch`.
 - Tag milestones, e.g. `v0.1-ping-test`.
 - Commit source, configuration examples, scripts, tests, and documentation.
-  Do not stage `build/`, `simulation/third_party/`, `NodeBuildConfig.h`, IDE
-  settings, downloaded dependencies, binaries, libraries, object files, or logs.
+  `.gitignore` already excludes `build/`, `simulation/third_party/`,
+  `NodeBuildConfig.h`, and the local `archive/` folder.
+- Before merging to `main`, build from a fresh clone (`./scripts/setup-simulation.sh`)
+  and have a teammate review the pull request.

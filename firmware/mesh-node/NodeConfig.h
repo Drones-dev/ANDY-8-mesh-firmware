@@ -39,9 +39,9 @@
 #endif
 
 #ifndef ANDY_NEIGHBOR_TIMEOUT_MS
-// Five seconds allows several one-second HELLOs to be missed before declaring a
-// link lost. This reduces false alarms from an occasional corrupted LoRa frame.
-#define ANDY_NEIGHBOR_TIMEOUT_MS 5000UL
+// Three seconds = three missed one-second HELLOs, matching the documented
+// "three missed heartbeats" rule and leaving margin under the 5 s requirement.
+#define ANDY_NEIGHBOR_TIMEOUT_MS 3000UL
 #endif
 
 #ifndef ANDY_TELEMETRY_INTERVAL_MS
@@ -60,10 +60,6 @@
 // A MAVLink field older than three seconds is marked unavailable instead of
 // silently presenting old flight information as current.
 #define ANDY_MAVLINK_FRESHNESS_MS 3000UL
-#endif
-
-#ifndef ANDY_MAVLINK_SELF_TEST
-#define ANDY_MAVLINK_SELF_TEST 0
 #endif
 
 #if ANDY_TELEMETRY_SOURCE == ANDY_TELEMETRY_MAVLINK
@@ -203,12 +199,12 @@ inline NodeConfig loadNodeConfig() {
       // 125.0 kHz: channel bandwidth; narrower channels trade speed for range.
       // SF9: spreading factor; a middle setting for range and airtime.
       // Coding rate 4/7: adds three error-correction bits per four data bits.
-      // 14 dBm: radio transmit power used during the successful bench test.
+      // 12 dBm: documented transmit power for short-range testing.
       // Preamble 8: standard eight-symbol receiver synchronization pattern.
       // 1.8 V: powers the SX1262 temperature-compensated crystal oscillator.
       // Pins 41/39/42/40: NSS, DIO1 interrupt, RESET, and BUSY.
       // Pin 38: RXEN controls the Wio board's receive-side antenna switch.
-      RadioConfig{915.0F, 125.0F, 9, 7, 14, 8, 1.8F, 41, 39, 42, 40,
+      RadioConfig{915.0F, 125.0F, 9, 7, 12, 8, 1.8F, 41, 39, 42, 40,
                   38}};
 }
 

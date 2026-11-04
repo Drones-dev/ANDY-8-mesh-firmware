@@ -2,7 +2,7 @@
 
 namespace AndyMesh {
 
-NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(5000) {
+NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(3000) {
   // Clear every fixed slot at startup. LOST is a harmless initial status because
   // occupied=false means the slot is not yet a real neighbor entry.
   for (size_t i = 0; i < kMaxNeighbors; ++i) {

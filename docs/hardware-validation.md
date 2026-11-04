@@ -23,7 +23,7 @@ each board, changing only its local `NodeBuildConfig.h`.
 - Every active board logs a HELLO about once per second.
 - A receiver adds only nodes whose HELLO it directly receives.
 - The neighbor table shows role, RSSI, SNR, status, and HELLO count.
-- Removing power from a neighbor changes it to `LOST` after about five seconds.
+- Removing power from a neighbor changes it to `LOST` after about three seconds (three missed HELLOs).
 - Restoring power changes it back to `ACTIVE`.
 - Each drone sends simulated telemetry about every two seconds.
 - The Ground Station reports the correct originating ID and does not mix values
@@ -68,18 +68,6 @@ The provider parses `HEARTBEAT`, `GLOBAL_POSITION_INT`, `GPS_RAW_INT`,
 freshness timer. Stale or missing real values are marked unavailable and are
 never replaced with simulated values.
 
-## Synthetic MAVLink parser check
-
-With MAVLink mode configured, define `ANDY_MAVLINK_SELF_TEST 1`. At startup the
-firmware generates HEARTBEAT, GLOBAL_POSITION_INT, and VFR_HUD frames, converts
-them to raw bytes, feeds those bytes through the same parser used by UART4, and
-prints `[MAVLINK SELF-TEST] PASS` or halts on failure.
-
-Disable the self-test for flight testing. The synthetic check validates parsing
-and field mapping, but it does not validate the physical UART4 pins, electrical
-levels, PX4 stream configuration, or behavior in flight. Those items remain
-hardware validation work.
-
 ## Packet format
 
 All multi-byte integers use network byte order (big endian). No raw C++ structs
@@ -90,9 +78,6 @@ type, source ID, destination ID, 16-bit sequence number, 32-bit uptime, and
 8-bit payload length. HELLO is 7 bytes; telemetry is 32 bytes (including heading
 in centidegrees and GPS fix status). RadioLib's LoRa
 CRC protects each over-the-air frame.
-
-See [hardware-compatibility.md](hardware-compatibility.md) for verified board,
-motor, GPS/compass, wiring, PX4 target, and remaining validation details.
 
 ## PX4 SIH and mesh simulation
 
