@@ -99,7 +99,43 @@ Reroute demo (Node 2 is disconnected at 5 s and restored at 12 s):
 ./build/andy_mesh_sim --topology diamond --failure-demo
 ```
 
-Telemetry lines appear only when PX4 is running and sending MAVLink. For three
+Telemetry lines appear only when PX4 is running and sending MAVLink.
+
+## Ground Station dashboard
+
+The simulator can write its state to `dashboard/status.json`; `dashboard/index.html`
+reads that file once per second and shows the mesh map (links, active routes,
+radio state), the latest telemetry per drone, and recent events.
+
+```sh
+# Terminal 1: three PX4 drones
+./scripts/start-px4-sih.sh ~/PX4-Autopilot
+
+# Terminal 2: mesh simulator writing the status file
+./build/andy_mesh_sim --topology diamond --status dashboard/status.json
+
+# Terminal 3: serve the dashboard
+cd dashboard && python3 -m http.server 8000
+```
+
+Open <http://localhost:8000> in a browser. While the simulator runs, typing
+`1`, `2`, or `3` and Enter in terminal 2 turns that drone's radio off or on.
+
+### Distance-based links
+
+With `--topology distance`, two nodes are linked only while they are within
+`--range-m` meters of each other, using the positions each drone's PX4 reports.
+Signal strength is derived from distance, so the nearer neighbor wins route
+ties. The dashboard then draws drones at their real positions (north up) with
+the Ground Station's range circle.
+
+```sh
+./build/andy_mesh_sim --topology distance --range-m 60 --status dashboard/status.json
+```
+
+The Ground Station is placed at Drone 1's first position fix (the launch point)
+unless `--gs-lat` and `--gs-lon` are given. The range is a simulation setting,
+not a LoRa range estimate. For three
 live PX4 SIH vehicles, follow [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ## Run the ping test

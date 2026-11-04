@@ -45,6 +45,8 @@ class SimulatedRadioNetwork {
   void addEndpoint(SimulatedRadioEndpoint* endpoint);
   void addLink(const SimulatedLink& link);
   bool setLink(NodeId a, NodeId b, bool enabled);
+  // Changes a link's state and signal strength (used by distance-based links).
+  bool updateLink(NodeId a, NodeId b, bool enabled, float rssiDbm);
   void transmit(NodeId source, const uint8_t* data, size_t length);
 
  private:

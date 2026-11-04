@@ -36,6 +36,17 @@ bool SimulatedRadioNetwork::setLink(NodeId a, NodeId b, bool enabled) {
     }
   return false;
 }
+bool SimulatedRadioNetwork::updateLink(NodeId a, NodeId b, bool enabled,
+                                      float rssiDbm) {
+  for (auto& l : links_) {
+    if ((l.a == a && l.b == b) || (l.a == b && l.b == a)) {
+      l.enabled = enabled;
+      l.rssiDbm = rssiDbm;
+      return true;
+    }
+  }
+  return false;
+}
 uint32_t SimulatedRadioNetwork::random100() {
   randomState_ = randomState_ * 1664525U + 1013904223U;
   return (randomState_ >> 16) % 100U;
