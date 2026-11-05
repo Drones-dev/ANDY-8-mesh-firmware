@@ -135,7 +135,29 @@ the Ground Station's range circle.
 
 The Ground Station is placed at Drone 1's first position fix (the launch point)
 unless `--gs-lat` and `--gs-lon` are given. The range is a simulation setting,
-not a LoRa range estimate. For three
+not a LoRa range estimate.
+
+### Flight scenario
+
+`simulation/fly_scenario.py` takes off the three PX4 drones and flies them
+through three formations sized for a 60 m range:
+
+| Formation | Drone 1 | Drone 2 | Drone 3 | What the mesh shows |
+|---|---|---|---|---|
+| LINE (30 s) | 40 m E | 80 m E | 120 m E | Drone 3 reaches the ground in 3 hops |
+| OVERTAKE (30 s) | 40 m E | 145 m E | 95 m E | Drone 2 now relays through Drone 3 |
+| DIAMOND (60 s) | 40 m E, 35 m N | 45 m E, 30 m S | 85 m E | Two paths for Drone 3; turning off Drone 2 reroutes it via Drone 1 |
+
+Then all drones land. It uses PX4's ground-control link (UDP 14550), so it runs
+alongside `andy_mesh_sim`, which uses 14540-14542.
+
+```sh
+# Terminal 4, after PX4, the mesh simulator, and the dashboard are running
+python3 simulation/fly_scenario.py
+```
+
+Requires `pymavlink` (`pip install --user pymavlink` if it is not already
+installed by the PX4 setup script). For three
 live PX4 SIH vehicles, follow [`docs/hardware-validation.md`](docs/hardware-validation.md).
 
 ## Run the ping test

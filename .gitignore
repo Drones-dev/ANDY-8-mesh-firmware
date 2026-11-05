@@ -20,3 +20,6 @@ archive/
 
 # Editor settings
 .vscode/
+
+# Python bytecode
+__pycache__/
