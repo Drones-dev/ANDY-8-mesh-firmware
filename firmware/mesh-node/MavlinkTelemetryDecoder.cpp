@@ -53,7 +53,8 @@ MavlinkTelemetryDecoder::MavlinkTelemetryDecoder()
       heartbeatMs_(0),
       healthMs_(0),
       headingMs_(0),
-      gpsFixMs_(0) {}
+      gpsFixMs_(0),
+      globalPositionMs_(0) {}
 // begin assigns the mesh identity once. It also stores the maximum age allowed
 // for each measurement; an old GPS value must not look like a current fix.
 void MavlinkTelemetryDecoder::begin(NodeId id, uint32_t f) {
@@ -89,7 +90,7 @@ void MavlinkTelemetryDecoder::ingestByte(uint8_t b, uint32_t now) {
       latest_.longitudeE7 = m.lon;
       latest_.altitudeCm = m.relative_alt / 10;
       latest_.groundSpeedCms = speed(m.vx, m.vy);
-      positionMs_ = altitudeMs_ = speedMs_ = now;
+      positionMs_ = altitudeMs_ = speedMs_ = globalPositionMs_ = now;
       if (m.hdg != UINT16_MAX && m.hdg < 36000) {
         latest_.headingCentidegrees = m.hdg;
         headingMs_ = now;
@@ -105,7 +106,9 @@ void MavlinkTelemetryDecoder::ingestByte(uint8_t b, uint32_t now) {
       latest_.gpsFixStatus =
           static_cast<GpsFixStatus>(m.fix_type <= 8 ? m.fix_type : 0);
       gpsFixMs_ = now;
-      if (m.fix_type >= 3) {
+      // Its altitude is above sea level, so it is only used when
+      // GLOBAL_POSITION_INT (height above home) is not arriving.
+      if (m.fix_type >= 3 && !fresh(now, globalPositionMs_, freshnessMs_)) {
         latest_.latitudeE7 = m.lat;
         latest_.longitudeE7 = m.lon;
         latest_.altitudeCm = m.alt / 10;
@@ -216,7 +219,8 @@ MavlinkTelemetryDecoder::MavlinkTelemetryDecoder()
       heartbeatMs_(0),
       healthMs_(0),
       headingMs_(0),
-      gpsFixMs_(0) {}
+      gpsFixMs_(0),
+      globalPositionMs_(0) {}
 void MavlinkTelemetryDecoder::begin(NodeId, uint32_t) {}
 void MavlinkTelemetryDecoder::ingestByte(uint8_t, uint32_t) {}
 bool MavlinkTelemetryDecoder::read(uint32_t, TelemetryData&) { return false; }

@@ -35,10 +35,11 @@ bool RadioManager::begin(const RadioConfig& config, Print& log) {
     return false;
   }
 
-  // begin programs the LoRa modem with the same frequency, bandwidth, spreading
-  // factor, coding rate, private sync word, power, preamble, and TCXO voltage as
-  // the bench-tested reference. The private sync word helps ignore public LoRa
-  // traffic that is not part of this project.
+  // begin programs the LoRa modem with the same frequency, bandwidth, coding
+  // rate, private sync word, power, preamble, and TCXO voltage as the
+  // bench-tested reference; the spreading factor comes from NodeConfig (SF7).
+  // The private sync word helps ignore public LoRa traffic that is not part of
+  // this project.
   lastError_ = radio_.begin(
       config.frequencyMhz, config.bandwidthKhz, config.spreadingFactor,
       config.codingRateDenominator, RADIOLIB_SX126X_SYNC_WORD_PRIVATE,

@@ -34,14 +34,16 @@
 #endif
 
 #ifndef ANDY_HELLO_INTERVAL_MS
-// One HELLO per second gives quick discovery without using a blocking delay.
-#define ANDY_HELLO_INTERVAL_MS 1000UL
+// One HELLO every two seconds. All nodes share one LoRa channel, so HELLOs are
+// kept to half the earlier rate to leave airtime for relayed telemetry.
+#define ANDY_HELLO_INTERVAL_MS 2000UL
 #endif
 
 #ifndef ANDY_NEIGHBOR_TIMEOUT_MS
-// Three seconds = three missed one-second HELLOs, matching the documented
-// "three missed heartbeats" rule and leaving margin under the 5 s requirement.
-#define ANDY_NEIGHBOR_TIMEOUT_MS 3000UL
+// Five seconds: a neighbor is LOST after two missed two-second HELLOs plus
+// margin, so one lost HELLO does not cause a false reroute, and failure is
+// still detected within the 5 s requirement.
+#define ANDY_NEIGHBOR_TIMEOUT_MS 5000UL
 #endif
 
 #ifndef ANDY_TELEMETRY_INTERVAL_MS
@@ -193,18 +195,20 @@ inline NodeConfig loadNodeConfig() {
       ANDY_NEIGHBOR_TABLE_INTERVAL_MS,
       ANDY_MAVLINK_FRESHNESS_MS,
       static_cast<TelemetrySource>(ANDY_TELEMETRY_SOURCE),
-      // These values and pins exactly preserve the bench-tested PING/PONG setup.
+      // Pins match the bench-tested PING/PONG setup. The spreading factor is
+      // SF7 here instead of the ping test's SF9, to cut airtime per packet.
       //
       // 915.0 MHz: US-band test frequency used by the existing hardware.
       // 125.0 kHz: channel bandwidth; narrower channels trade speed for range.
-      // SF9: spreading factor; a middle setting for range and airtime.
+      // SF7: spreading factor; about 0.12 s per 45-byte telemetry packet
+      //   (SF9 took about 0.4 s), with shorter range than SF9.
       // Coding rate 4/7: adds three error-correction bits per four data bits.
       // 12 dBm: documented transmit power for short-range testing.
       // Preamble 8: standard eight-symbol receiver synchronization pattern.
       // 1.8 V: powers the SX1262 temperature-compensated crystal oscillator.
       // Pins 41/39/42/40: NSS, DIO1 interrupt, RESET, and BUSY.
       // Pin 38: RXEN controls the Wio board's receive-side antenna switch.
-      RadioConfig{915.0F, 125.0F, 9, 7, 12, 8, 1.8F, 41, 39, 42, 40,
+      RadioConfig{915.0F, 125.0F, 7, 7, 12, 8, 1.8F, 41, 39, 42, 40,
                   38}};
 }
 

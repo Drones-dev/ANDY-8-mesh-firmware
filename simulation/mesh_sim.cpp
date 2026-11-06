@@ -18,6 +18,11 @@
 #include "NeighborTable.h"
 #include "Router.h"
 #include "SimulatedRadio.h"
+
+// Mesh timing, the same values as the firmware's NodeConfig.h.
+constexpr uint32_t kHelloIntervalMs = 2000;
+constexpr uint32_t kNeighborTimeoutMs = 5000;
+constexpr uint32_t kTelemetryIntervalMs = 2000;
 using namespace AndyMesh;
 
 namespace {
@@ -91,7 +96,7 @@ struct Node {
       : id(n),
         role(n == 0 ? NodeRole::GroundStation : NodeRole::Drone),
         radio(net, n) {
-    neighbors.begin(n, 3000);
+    neighbors.begin(n, kNeighborTimeoutMs);
     router.begin(n, n == 0);  // Node 0 is the Ground Station.
     decoder.begin(n, 3000);
     if (n) {
@@ -236,7 +241,7 @@ struct Node {
       uint8_t p[kHelloPayloadSize];
       encodeHelloPayload(h, p, sizeof p);
       sendPayload(PacketType::Hello, kBroadcastNodeId, p, sizeof p, now);
-      nextHello = now + 1000;
+      nextHello = now + kHelloIntervalMs;
     }
     if (id && static_cast<int32_t>(now - nextTelemetry) >= 0) {
       TelemetryData t;
@@ -258,7 +263,7 @@ struct Node {
           }
         }
       }
-      nextTelemetry = now + 2000;
+      nextTelemetry = now + kTelemetryIntervalMs;
     }
   }
 };

@@ -3,9 +3,17 @@
 Firmware for the **ANDY 8: RED** distributed mesh telemetry and node hand-off project
 (CS4850 Senior Project, Kennesaw State University).
 
-Each drone carries a small LoRa radio node. Direct-neighbor discovery and
-telemetry, multi-hop relaying, route selection, and automatic rerouting are
-implemented (tested in PC simulation; hardware validation pending).
+Each drone carries a small LoRa radio node. The nodes find each other, relay
+telemetry over multiple hops to the Ground Station, and reroute automatically
+when a relay drops out.
+
+## Scope
+
+The mesh-node telemetry and hand-off software is complete and tested in
+simulation: three PX4 drones fly in software-in-the-loop (SIH), each one's
+telemetry is routed by the same C++ classes that run on the ESP32-S3, and a
+browser dashboard shows positions, links, routes, and telemetry. Running the
+multi-hop mesh on the real radios and flight controllers is the next phase.
 
 ## Status
 
@@ -17,166 +25,142 @@ implemented (tested in PC simulation; hardware validation pending).
 | MAVLink UART4 provider | Done (physical UART/PX4 validation pending) |
 | Shared UART/UDP MAVLink decoder with heading and GPS fix | Done |
 | PC simulated radio and four-node line-topology tests | Done |
-| Live three-vehicle PX4 SIH integration | Adapter built; live PX4 run pending |
+| Live three-vehicle PX4 SIH integration | Done (three SIH drones, distance-based links, flight scenario) |
 | Multi-hop forwarding with duplicate prevention | Done (simulation tested; hardware validation pending) |
 | Route selection (fewest hops, then strongest signal) | Done (simulation tested) |
-| Relay failure detection and reroute (5 s target) | Done (simulation tested, ~3 s) |
+| Relay failure detection and reroute (5 s target) | Done (simulation tested, ~3-5 s) |
+| Ground Station test dashboard | Done (map, routes, telemetry, events) |
 
-## Hardware
+## Known limitations
 
-- Node: Seeed XIAO ESP32S3 + Wio-SX1262 kit (915 MHz, US band)
-- Library: [RadioLib](https://github.com/jgromes/RadioLib)
-- Language: C/C++ (Arduino framework for ESP32-S3)
-- Flight controller: MicoAir743v2-AIO-45A (`micoair_h743-v2` PX4 target), ESP32 on UART4/TELEM2
-- Motors: EMAX ECO II 2004 3000KV (controlled only by PX4)
-- GPS/compass: HGLRC M100-5883 (connected only to the flight controller)
+- **No acknowledgment or resend.** Telemetry sent to a relay that has just
+  failed is lost until the relay is declared lost (5 s without a HELLO), so a
+  packet or two can be dropped during a reroute.
+- **Shared radio channel.** Nodes use SF7 / 125 kHz (about 0.12 s per 45-byte
+  telemetry packet) and send HELLOs every 2 s, which keeps four nodes at roughly
+  half of one channel's airtime. Nodes do not check that the channel is free
+  before sending (no listen-before-talk), so collisions are still possible. The
+  PC simulation does not model airtime or collisions.
+- **Route information can be up to 2 s old.** Two drones can briefly pick each
+  other as next hop while they move (seen once in simulation, for about 1 s);
+  the duplicate filter stops any packet from circling.
+- **Simulated links.** Links in the simulator switch on or off at a set range;
+  they do not fade gradually like a real radio link.
+- **Hardware.** Multi-hop routing and the MAVLink UART link to the flight
+  controller have not yet run on the boards. Only the two-board ping test has.
+
+## Quick start for teammates
+
+This runs everything built so far on one PC: three PX4 drones in simulation,
+the mesh firmware's routing in the mesh simulator, and the test dashboard.
+No drone or radio hardware is needed.
+
+### 1. One-time setup
+
+PX4 needs Linux. On Windows, use WSL2 with Ubuntu (in PowerShell as
+administrator: `wsl --install -d Ubuntu`, then restart). Everything below runs
+in the Ubuntu terminal.
+
+```sh
+# PX4 (takes a while the first time)
+cd ~
+git clone https://github.com/PX4/PX4-Autopilot.git --recursive
+bash ./PX4-Autopilot/Tools/setup/ubuntu.sh
+cd ~/PX4-Autopilot && make px4_sitl
+pip install --user pymavlink
+
+# This repository, on the simulation branch
+cd ~
+git clone https://github.com/Drones-dev/ANDY-8-mesh-firmware.git
+cd ANDY-8-mesh-firmware
+git switch px4-full-sim
+./scripts/setup-simulation.sh
+```
+
+`setup-simulation.sh` downloads the MAVLink headers, builds everything, and
+runs the tests. It should end with `100% tests passed, 0 tests failed out of 3`.
+
+### 2. Run the demo (four terminals)
+
+Open four Ubuntu terminals and start each one with `cd ~/ANDY-8-mesh-firmware`.
+
+```sh
+# Terminal 1: three PX4 drones, launching from the KSU Kennesaw Campus Green
+export PX4_HOME_LAT=34.03825 PX4_HOME_LON=-84.58184 PX4_HOME_ALT=328
+./scripts/start-px4-sih.sh ~/PX4-Autopilot
+
+# Terminal 2: mesh simulator, 60 m radio range, writing the dashboard file
+./build/andy_mesh_sim --topology distance --range-m 60 --status dashboard/status.json
+
+# Terminal 3: dashboard
+cd dashboard && python3 -m http.server 8000
+
+# Terminal 4: flight scenario (start after terminals 1-3 are running)
+python3 simulation/fly_scenario.py
+```
+
+Open <http://localhost:8000/index.html> in a browser (on Windows too; WSL
+forwards localhost).
+
+### 3. What to look for
+
+- **LINE:** Drone 3 is out of the Ground Station's range and reaches it in
+  3 hops (Drone 3 > Drone 2 > Drone 1 > Ground Station).
+- **OVERTAKE:** Drone 2 flies past Drone 3, and its route flips to go through
+  Drone 3.
+- **DIAMOND:** when terminal 4 prints `Formation DIAMOND: holding 60 s.`,
+  click terminal 2, type `2` and press Enter. Drone 2's radio turns off (red on
+  the dashboard), and about 3-5 s later Drone 3 reroutes through Drone 1. Type
+  `2` and Enter again to turn it back on.
+- **LAND:** all three drones land where they are.
+
+Terminal 2 also prints every relay, route change, and lost neighbor.
+
+### 4. Stop
+
+Press Ctrl+C in terminals 2 and 3, then:
+
+```sh
+pkill -x px4
+```
 
 ## Repo layout
 
 ```
 CMakeLists.txt                 Host build and test definition
 firmware/
-  ping-test/
-    groundStationPingTest/   Ground Station sketch (sends PING, expects PONG)
-    drone1/                  Drone 1 sketch (answers PONG)
-  mesh-node/                 Shared firmware for all four node profiles
+  mesh-node/                   Mesh firmware shared by all four nodes
+                               (radio, packets, HELLO, neighbor table,
+                               router, MAVLink decoder)
+  ping-test/                   Original two-board radio test
 tests/
-  protocol_tests.cpp         Host tests for packet serialization and validation
-  simulation_tests.cpp       Simulated links, discovery, timeout, and recovery
+  protocol_tests.cpp           Packet serialization and validation
+  simulation_tests.cpp         Simulated links, discovery, timeout, recovery
+  routing_tests.cpp            Route selection, reroute, loop prevention, duplicates
+simulation/
+  mesh_sim.cpp                 PC mesh simulator (4 nodes, PX4 MAVLink input)
+  SimulatedRadio.h/.cpp        Simulated radio links
+  fly_scenario.py              Flies the three PX4 drones through the formations
+dashboard/
+  index.html                   Ground Station test dashboard (reads status.json)
+scripts/
+  setup-simulation.sh          Downloads MAVLink headers, builds, runs tests
+  start-px4-sih.sh             Starts three PX4 SIH drones
 docs/
-  hardware-validation.md
-simulation/                    PC simulated-radio implementation and SITL adapter
-scripts/                       Reproducible simulator/PX4 SIH launch helpers
-build/                         Generated locally by CMake; never committed
+  simulation.md                Simulator options, dashboard, flight scenario
+  hardware-validation.md       Hardware, ping test, board setup, wiring, packet format
 ```
 
-`simulation/third_party/` is also generated locally. The setup script downloads
-the MAVLink C headers into that directory, so teammates do not need generated
-dependency files stored in Git.
+`build/` and `simulation/third_party/` (MAVLink headers) are generated locally
+and are not committed.
 
-## Run the Phase 2 mesh firmware
+## Documentation
 
-The original ping-test sketches are preserved as the known-working reference.
-For mesh firmware setup, per-board identity configuration, simulated telemetry
-checks, and MAVLink wiring requirements, follow
-[`docs/hardware-validation.md`](docs/hardware-validation.md).
-
-The shared firmware uses nonblocking radio receive/transmit operations and
-`millis()` scheduling. Each node broadcasts HELLO, maintains a bounded direct-
-neighbor table, and marks a neighbor lost after the configured heartbeat timeout.
-Drone profiles transmit serialized telemetry to the Ground Station profile.
-
-## Build and run host tests
-
-From the repository root:
-
-```sh
-./scripts/setup-simulation.sh
-```
-
-This creates all compiler output under `build/` and runs both CTest suites. The
-tests cover protocol round trips, validation, direct-link restrictions,
-neighbor discovery, heartbeat timeout, and reconnection.
-
-## Run the PC simulation
-
-```sh
-./scripts/setup-simulation.sh
-./build/andy_mesh_sim --duration-ms 10000
-```
-
-Two radio layouts are built in:
-
-- `line` (default): Ground - Drone 1 - Drone 2 - Drone 3. Drone 3's telemetry
-  hops through Drone 2 and Drone 1. There is no backup path.
-- `diamond`: Drones 1 and 2 both reach the Ground Station; Drone 3 reaches
-  both drones but not the Ground Station. Drone 3 relays through Drone 2
-  (stronger signal) and reroutes through Drone 1 if Drone 2 is lost.
-
-Reroute demo (Node 2 is disconnected at 5 s and restored at 12 s):
-
-```sh
-./build/andy_mesh_sim --topology diamond --failure-demo
-```
-
-Telemetry lines appear only when PX4 is running and sending MAVLink.
-
-## Ground Station dashboard
-
-The simulator can write its state to `dashboard/status.json`; `dashboard/index.html`
-reads that file once per second and shows the mesh map (links, active routes,
-radio state), the latest telemetry per drone, and recent events.
-
-```sh
-# Terminal 1: three PX4 drones
-./scripts/start-px4-sih.sh ~/PX4-Autopilot
-
-# Terminal 2: mesh simulator writing the status file
-./build/andy_mesh_sim --topology diamond --status dashboard/status.json
-
-# Terminal 3: serve the dashboard
-cd dashboard && python3 -m http.server 8000
-```
-
-Open <http://localhost:8000> in a browser. While the simulator runs, typing
-`1`, `2`, or `3` and Enter in terminal 2 turns that drone's radio off or on.
-
-### Distance-based links
-
-With `--topology distance`, two nodes are linked only while they are within
-`--range-m` meters of each other, using the positions each drone's PX4 reports.
-Signal strength is derived from distance, so the nearer neighbor wins route
-ties. The dashboard then draws drones at their real positions (north up) with
-the Ground Station's range circle.
-
-```sh
-./build/andy_mesh_sim --topology distance --range-m 60 --status dashboard/status.json
-```
-
-The Ground Station is placed at Drone 1's first position fix (the launch point)
-unless `--gs-lat` and `--gs-lon` are given. The range is a simulation setting,
-not a LoRa range estimate.
-
-### Flight scenario
-
-`simulation/fly_scenario.py` takes off the three PX4 drones and flies them
-through three formations sized for a 60 m range:
-
-| Formation | Drone 1 | Drone 2 | Drone 3 | What the mesh shows |
-|---|---|---|---|---|
-| LINE (30 s) | 40 m E | 80 m E | 120 m E | Drone 3 reaches the ground in 3 hops |
-| OVERTAKE (30 s) | 40 m E | 145 m E | 95 m E | Drone 2 now relays through Drone 3 |
-| DIAMOND (60 s) | 40 m E, 35 m N | 45 m E, 30 m S | 85 m E | Two paths for Drone 3; turning off Drone 2 reroutes it via Drone 1 |
-
-Then all drones land. It uses PX4's ground-control link (UDP 14550), so it runs
-alongside `andy_mesh_sim`, which uses 14540-14542.
-
-```sh
-# Terminal 4, after PX4, the mesh simulator, and the dashboard are running
-python3 simulation/fly_scenario.py
-```
-
-Requires `pymavlink` (`pip install --user pymavlink` if it is not already
-installed by the PX4 setup script). For three
-live PX4 SIH vehicles, follow [`docs/hardware-validation.md`](docs/hardware-validation.md).
-
-## Run the ping test
-
-1. Install Arduino IDE 2.x and the **esp32 by Espressif Systems** board package, then the
-   **RadioLib** library.
-2. Select **Tools > Board > esp32 > XIAO_ESP32S3** and set **USB CDC On Boot: Enabled**.
-3. Upload `drone1` to one board and `groundStationPingTest` to the other.
-4. Open the Serial Monitor at **115200 baud** on the Ground Station.
-
-Expected Ground Station output:
-
-```
-Ground Station ready.
-Ping #1 -> sending PING to Drone 1
-LINK OK - Drone 1 answered. Signal strength (RSSI): -34.00 dBm
-```
-
-Unplug Drone 1 and after three missed pings it prints `*** NO SIGNAL from Drone 1 ***`.
+- [`docs/simulation.md`](docs/simulation.md): every simulator option and radio
+  layout, distance-based links, the dashboard, and the flight scenario.
+- [`docs/hardware-validation.md`](docs/hardware-validation.md): hardware list,
+  the two-board ping test, building a mesh node for each board, flight
+  controller wiring, and the packet format.
 
 ## Contributing
 
@@ -186,5 +170,4 @@ Unplug Drone 1 and after three missed pings it prints `*** NO SIGNAL from Drone 
 - Commit source, configuration examples, scripts, tests, and documentation.
   `.gitignore` already excludes `build/`, `simulation/third_party/`,
   `NodeBuildConfig.h`, and the local `archive/` folder.
-- Before merging to `main`, build from a fresh clone (`./scripts/setup-simulation.sh`)
-  and have a teammate review the pull request.
+- Before merging to `main`, build from a fresh clone (`./scripts/setup-simulation.sh`).

@@ -2,7 +2,7 @@
   ANDY 8: RED - Phase 2 mesh node firmware
 
   Board:   Seeed XIAO ESP32S3 + Wio-SX1262
-  Radio:   915 MHz, 125 kHz, SF9, CR 4/7, 12 dBm
+  Radio:   915 MHz, 125 kHz, SF7, CR 4/7, 12 dBm
   Library: RadioLib
 
   Copy NodeBuildConfig.example.h to NodeBuildConfig.h and select this board's
