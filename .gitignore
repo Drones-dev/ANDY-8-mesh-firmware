@@ -1,3 +1,25 @@
 # Windows folder junk
 Thumbs.db
 desktop.ini
+
+# Build output (created by CMake / setup-simulation.sh)
+build/
+
+# Downloaded MAVLink headers (setup-simulation.sh fetches these)
+simulation/third_party/
+
+# Each board's local identity file (copy from NodeBuildConfig.example.h)
+firmware/mesh-node/NodeBuildConfig.h
+
+# Dashboard status file (written by andy_mesh_sim --status)
+dashboard/status.json
+dashboard/status.json.tmp
+
+# Removed from prototype scope - kept locally for reference only
+archive/
+
+# Editor settings
+.vscode/
+
+# Python bytecode
+__pycache__/

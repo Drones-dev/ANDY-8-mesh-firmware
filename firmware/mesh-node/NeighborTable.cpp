@@ -2,7 +2,7 @@
 
 namespace AndyMesh {
 
-NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(5000) {
+NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(3000) {
   // Clear every fixed slot at startup. LOST is a harmless initial status because
   // occupied=false means the slot is not yet a real neighbor entry.
   for (size_t i = 0; i < kMaxNeighbors; ++i) {
@@ -13,7 +13,9 @@ NeighborTable::NeighborTable() : localNodeId_(0), timeoutMs_(5000) {
                                 0.0F,
                                 NeighborStatus::Lost,
                                 0,
-                                false};
+                                false,
+                                255,   // hopsToGround: no route
+                                255};  // nextHop: none
   }
 }
 
@@ -88,6 +90,8 @@ NeighborEvent NeighborTable::observeHello(const HelloPayload& hello,
   entry->rssiDbm = rssiDbm;
   entry->snrDb = snrDb;
   entry->status = NeighborStatus::Active;
+  entry->hopsToGround = hello.hopsToGround;
+  entry->nextHop = hello.nextHop;
   ++entry->helloPacketsReceived;
 
   return isNew ? NeighborEvent::Discovered

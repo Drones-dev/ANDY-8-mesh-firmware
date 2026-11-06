@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<!--
+  ANDY 8: RED - Ground Station dashboard
+
+  Reads status.json (written by andy_mesh_sim --status) once per second and
+  shows: the mesh map with link and route state, the latest telemetry per
+  drone, and recent network events.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ANDY 8 Ground Station</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 20px; background: #f4f4f4; color: #222; }
+  h1 { font-size: 20px; margin: 0 0 4px 0; }
+  #updated { color: #666; font-size: 13px; margin-bottom: 12px; }
+  .panel { background: white; border: 1px solid #ccc; border-radius: 6px; padding: 12px; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border-bottom: 1px solid #ddd; padding: 6px 8px; text-align: left; }
+  th { background: #eee; }
+  #events { font-family: monospace; font-size: 13px; white-space: pre; }
+  .legend { font-size: 13px; color: #444; }
+</style>
+</head>
+<body>
+
+<h1>ANDY 8: RED - Ground Station (PX4 simulation)</h1>
+<div id="updated">Waiting for data...</div>
+
+<div class="panel">
+  <svg id="map" width="640" height="370" style="background:#fafafa"></svg>
+  <div class="legend">
+    Green line = link up &nbsp;|&nbsp; Gray dashed = link down &nbsp;|&nbsp;
+    Thick blue = active route to the Ground Station &nbsp;|&nbsp; Red node = radio off
+    &nbsp;|&nbsp; Distance mode: drones at their PX4 positions, north up
+  </div>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Drone</th><th>Radio</th><th>Route</th><th>Latitude</th><th>Longitude</th>
+        <th>Altitude (m)</th><th>Battery</th><th>Packets</th><th>Last update</th>
+      </tr>
+    </thead>
+    <tbody id="telemetry"></tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <b>Events (newest first)</b>
+  <div id="events"></div>
+</div>
+
+<script>
+// Display name for each node.
+const NAMES = { 0: "Ground Station", 1: "Drone 1", 2: "Drone 2", 3: "Drone 3" };
+
+// Screen positions used by the fixed line/diamond layouts.
+const FIXED = {
+  0: { x: 90,  y: 170 },
+  1: { x: 320, y: 60  },
+  2: { x: 320, y: 280 },
+  3: { x: 550, y: 170 },
+};
+const NO_ROUTE = 255;
+const MAP_WIDTH = 640;
+const MAP_HEIGHT = 370;
+
+// Meters east/north of the Ground Station for a latitude/longitude.
+function toMeters(lat, lon, gs) {
+  const north = (lat - gs.lat) * 111320;
+  const east = (lon - gs.lon) * 111320 * Math.cos(gs.lat * Math.PI / 180);
+  return { east, north };
+}
+
+// Screen position of every node that can be drawn, plus the scale used.
+// Distance mode: real positions, scaled so all drones and the Ground
+// Station's range circle fit on the map. Fixed layouts: the FIXED table.
+function screenPositions(status) {
+  if (status.range_m === 0) {
+    return { points: FIXED, pixelsPerMeter: 0 };
+  }
+
+  const gs = status.nodes.find(n => n.id === 0);
+  if (!gs.has_pos) {
+    return { points: {}, pixelsPerMeter: 0 };
+  }
+
+  // Positions in meters, and the area they cover (including the range circle).
+  const meters = {};
+  let minE = -status.range_m, maxE = status.range_m;
+  let minN = -status.range_m, maxN = status.range_m;
+  for (const node of status.nodes) {
+    if (!node.has_pos) continue;
+    const m = toMeters(node.lat, node.lon, gs);
+    meters[node.id] = m;
+    minE = Math.min(minE, m.east);  maxE = Math.max(maxE, m.east);
+    minN = Math.min(minN, m.north); maxN = Math.max(maxN, m.north);
+  }
+
+  // One scale for both axes so distances are not stretched.
+  const pad = 50;
+  const scale = Math.min((MAP_WIDTH - 2 * pad) / (maxE - minE),
+                         (MAP_HEIGHT - 2 * pad - 30) / (maxN - minN));
+  const points = {};
+  for (const id in meters) {
+    points[id] = {
+      x: pad + (meters[id].east - minE) * scale,
+      y: pad + (maxN - meters[id].north) * scale,  // north is up
+    };
+  }
+  return { points, pixelsPerMeter: scale };
+}
+
+// Route text for a node, e.g. "2 hops via Drone 1".
+function routeText(node) {
+  if (node.id === 0) return "destination";
+  if (!node.radio_on) return "radio off";
+  if (node.hops === NO_ROUTE) return "no route";
+  return `${node.hops} hop${node.hops > 1 ? "s" : ""} via ${NAMES[node.via]}`;
+}
+
+// Compact route text for the position map, e.g. "2 hops > D1".
+function shortRoute(node) {
+  if (node.id === 0) return "Ground Station";
+  if (!node.radio_on) return "radio off";
+  if (node.hops === NO_ROUTE) return "no route";
+  return `${node.hops} hop${node.hops > 1 ? "s" : ""} > ${node.via === 0 ? "GS" : "D" + node.via}`;
+}
+
+// Draws the range circle, links, active routes, and nodes on the SVG map.
+function drawMap(status) {
+  const { points, pixelsPerMeter } = screenPositions(status);
+  const distanceMode = status.range_m > 0;
+  let svg = "";
+
+  if (distanceMode && !points[0]) {
+    svg += `<text x="20" y="40" font-size="14">Waiting for drone positions from PX4...</text>`;
+    document.getElementById("map").innerHTML = svg;
+    return;
+  }
+
+  // Ground Station radio range (distance mode only).
+  if (distanceMode) {
+    const gs = points[0];
+    svg += `<circle cx="${gs.x}" cy="${gs.y}" r="${status.range_m * pixelsPerMeter}" fill="#1f6fd1" fill-opacity="0.05" stroke="#1f6fd1" stroke-dasharray="4,4"/>`;
+    svg += `<text x="${gs.x}" y="${gs.y - status.range_m * pixelsPerMeter - 6}" text-anchor="middle" font-size="11" fill="#1f6fd1">Ground Station range ${status.range_m} m</text>`;
+  }
+
+  // Radio links: green when up. Down links are drawn gray dashed in the fixed
+  // layouts; in distance mode they are left out, since every pair is a
+  // possible link.
+  for (const link of status.links) {
+    const a = points[link.a];
+    const b = points[link.b];
+    if (!a || !b) continue;
+    if (link.up) {
+      svg += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#2a9d2a" stroke-width="3"/>`;
+      if (distanceMode && link.distance_m >= 0) {
+        svg += `<text x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 6}" text-anchor="middle" font-size="11" fill="#2a7d2a">${link.distance_m} m</text>`;
+      }
+    } else if (!distanceMode) {
+      svg += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#aaa" stroke-width="2" stroke-dasharray="6,6"/>`;
+    }
+  }
+
+  // Active routes: each drone with a route is joined to its next hop.
+  for (const node of status.nodes) {
+    if (node.id === 0 || node.hops === NO_ROUTE || !node.radio_on) continue;
+    const from = points[node.id];
+    const to = points[node.via];
+    if (!from || !to) continue;
+    svg += `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" stroke="#1f6fd1" stroke-width="9" stroke-opacity="0.45"/>`;
+  }
+
+  // Nodes: blue = Ground Station, green = has a route, orange = no route,
+  // red = radio off.
+  for (const node of status.nodes) {
+    const p = points[node.id];
+    if (!p) continue;
+    let color = "#2a9d2a";
+    if (node.id === 0) color = "#1f6fd1";
+    else if (!node.radio_on) color = "#d62828";
+    else if (node.hops === NO_ROUTE) color = "#f4a261";
+
+    svg += `<circle cx="${p.x}" cy="${p.y}" r="20" fill="${color}"/>`;
+    svg += `<text x="${p.x}" y="${p.y + 5}" text-anchor="middle" fill="white" font-weight="bold" font-size="13">${node.id === 0 ? "GS" : "D" + node.id}</text>`;
+
+    if (distanceMode) {
+      // Short label, alternating above/below so neighbors in a line don't overlap.
+      const labelY = node.id % 2 === 1 ? p.y - 28 : p.y + 36;
+      svg += `<text x="${p.x}" y="${labelY}" text-anchor="middle" font-size="11" fill="#333">${shortRoute(node)}</text>`;
+    } else {
+      svg += `<text x="${p.x}" y="${p.y + 36}" text-anchor="middle" font-size="12">${NAMES[node.id]}</text>`;
+      svg += `<text x="${p.x}" y="${p.y + 50}" text-anchor="middle" font-size="11" fill="#555">${routeText(node)}</text>`;
+    }
+  }
+
+  document.getElementById("map").innerHTML = svg;
+}
+
+// Fills the telemetry table with one row per drone.
+function drawTelemetry(status) {
+  let rows = "";
+  for (let id = 1; id <= 3; id++) {
+    const node = status.nodes.find(n => n.id === id);
+    const t = status.telemetry.find(x => x.drone === id);
+
+    const radio = node.radio_on ? "ON" : "OFF";
+    const route = routeText(node);
+
+    if (t) {
+      const battery = t.battery_pct === 255 ? `${t.battery_v.toFixed(2)} V` : `${t.battery_pct}% (${t.battery_v.toFixed(2)} V)`;
+      rows += `<tr><td>Drone ${id}</td><td>${radio}</td><td>${route}</td>
+        <td>${t.lat.toFixed(7)}</td><td>${t.lon.toFixed(7)}</td><td>${t.alt_m.toFixed(1)}</td>
+        <td>${battery}</td><td>${t.count}</td><td>${t.age_s.toFixed(1)} s ago (via ${NAMES[t.via]})</td></tr>`;
+    } else {
+      rows += `<tr><td>Drone ${id}</td><td>${radio}</td><td>${route}</td>
+        <td colspan="6">No telemetry received yet</td></tr>`;
+    }
+  }
+  document.getElementById("telemetry").innerHTML = rows;
+}
+
+// Event log, newest at the top.
+function drawEvents(status) {
+  document.getElementById("events").textContent = status.events.slice().reverse().join("\n");
+}
+
+// Requests the latest status.json. The time query keeps the browser from
+// reusing a cached copy.
+async function refresh() {
+  try {
+    const response = await fetch("status.json?t=" + Date.now());
+    const status = await response.json();
+    drawMap(status);
+    drawTelemetry(status);
+    drawEvents(status);
+    document.getElementById("updated").textContent =
+      `Simulation time ${status.time_s.toFixed(1)} s  |  links: ${status.topology}` +
+      (status.range_m > 0 ? `  |  radio range ${status.range_m} m` : "");
+  } catch (error) {
+    document.getElementById("updated").textContent =
+      "No data: status.json not found or simulator not running.";
+  }
+}
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>

@@ -171,8 +171,8 @@ ProtocolError decodePacket(const uint8_t* packet,
 ProtocolError encodeHelloPayload(const HelloPayload& hello,
                                  uint8_t* output,
                                  size_t outputCapacity) {
-  // A HELLO is exactly seven bytes:
-  // ID (1), role (1), version (1), and sender uptime (4).
+  // HELLO layout (9 bytes): ID (1), role (1), version (1), uptime (4),
+  // hops to ground (1), next hop (1).
   if (output == nullptr) {
     return ProtocolError::NullArgument;
   }
@@ -187,6 +187,8 @@ ProtocolError encodeHelloPayload(const HelloPayload& hello,
   output[1] = static_cast<uint8_t>(hello.role);
   output[2] = hello.protocolVersion;
   writeU32(output + 3, hello.uptimeMs);
+  output[7] = hello.hopsToGround;
+  output[8] = hello.nextHop;
   return ProtocolError::None;
 }
 
@@ -204,6 +206,8 @@ ProtocolError decodeHelloPayload(const uint8_t* payload,
   hello.role = static_cast<NodeRole>(payload[1]);
   hello.protocolVersion = payload[2];
   hello.uptimeMs = readU32(payload + 3);
+  hello.hopsToGround = payload[7];
+  hello.nextHop = payload[8];
   if (!isValidNodeId(hello.nodeId) || !isValidNodeRole(hello.role) ||
       hello.protocolVersion != kProtocolVersion) {
     return ProtocolError::InvalidField;
