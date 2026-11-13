@@ -10,9 +10,10 @@ class MavlinkTelemetryDecoder {
   void begin(NodeId nodeId, uint32_t freshnessMs);
   void ingestByte(uint8_t byte, uint32_t nowMs);
   bool read(uint32_t nowMs, TelemetryData& telemetry);
+
  private:
   TelemetryData latest_;
   uint32_t freshnessMs_, positionMs_, altitudeMs_, batteryMs_, speedMs_;
-  uint32_t heartbeatMs_, healthMs_, headingMs_, gpsFixMs_;
+  uint32_t heartbeatMs_, healthMs_, headingMs_, gpsFixMs_, globalPositionMs_;
 };
 }  // namespace AndyMesh

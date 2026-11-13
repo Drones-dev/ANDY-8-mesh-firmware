@@ -10,7 +10,8 @@ using namespace AndyMesh;
 namespace {
 
 void testHelloRoundTrip() {
-  const HelloPayload original{2, NodeRole::Relay, kProtocolVersion, 0x12345678};
+  const HelloPayload original{2, NodeRole::Relay, kProtocolVersion, 0x12345678,
+                              2, 1};
   uint8_t payload[kHelloPayloadSize];
   assert(encodeHelloPayload(original, payload, sizeof(payload)) ==
          ProtocolError::None);
@@ -39,6 +40,8 @@ void testHelloRoundTrip() {
   assert(result.nodeId == original.nodeId);
   assert(result.role == original.role);
   assert(result.uptimeMs == original.uptimeMs);
+  assert(result.hopsToGround == original.hopsToGround);
+  assert(result.nextHop == original.nextHop);
 }
 
 void testTelemetryRoundTrip() {
@@ -83,7 +86,7 @@ void testTelemetryRoundTrip() {
 
 void testMalformedPacketsAreRejected() {
   const uint8_t payload[kHelloPayloadSize] = {1, 1, kProtocolVersion,
-                                              0, 0, 0, 1};
+                                              0, 0, 0, 1, 255, 255};
   const PacketHeader header{kProtocolVersion, PacketType::Hello, 1,
                             kBroadcastNodeId, 1, 1,
                             static_cast<uint8_t>(sizeof(payload))};

@@ -2,7 +2,7 @@
   ANDY 8: RED - Phase 2 mesh node firmware
 
   Board:   Seeed XIAO ESP32S3 + Wio-SX1262
-  Radio:   915 MHz, 125 kHz, SF9, CR 4/7, 14 dBm
+  Radio:   915 MHz, 125 kHz, SF7, CR 4/7, 12 dBm
   Library: RadioLib
 
   Copy NodeBuildConfig.example.h to NodeBuildConfig.h and select this board's
@@ -13,7 +13,9 @@
     2. Broadcast periodic HELLO discovery/heartbeat packets.
     3. Update direct neighbors and detect heartbeat timeouts.
     4. Generate simulated telemetry or ingest MAVLink UART data.
-    5. Send telemetry from drone profiles to the Ground Station profile.
+    5. Select the next hop toward the Ground Station (Router).
+    6. Send telemetry to the next hop and relay telemetry addressed to this
+       node from other drones.
 */
 
 #include <Arduino.h>  // millis(), delay(), Serial, and basic Arduino types.
@@ -22,12 +24,12 @@
 // sketch readable and prevents radio, protocol, and telemetry details from being
 // mixed into one very large loop.
 #include "HelloManager.h"
-#include "MavlinkSyntheticTest.h"
 #include "MavlinkTelemetryProvider.h"
 #include "NeighborTable.h"
 #include "NodeConfig.h"
 #include "PacketProtocol.h"
 #include "RadioManager.h"
+#include "Router.h"
 #include "SimulatedTelemetryProvider.h"
 #include "TelemetryManager.h"
 
@@ -45,6 +47,7 @@ NodeConfig nodeConfig = loadNodeConfig();
 RadioManager radioManager;
 HelloManager helloManager;
 NeighborTable neighborTable;
+Router router;  // Next-hop selection and duplicate filtering.
 
 #if ANDY_TELEMETRY_SOURCE == ANDY_TELEMETRY_MAVLINK
 // ESP32 hardware UART number 1 receives bytes from the flight controller. The
@@ -115,7 +118,10 @@ bool transmitPayload(PacketType type,
 bool sendHello(uint32_t nowMs) {
   // HELLO is first encoded as its seven-byte payload, then wrapped in the common
   // header with destination 255 (broadcast) so every nearby node may receive it.
-  const HelloPayload hello = helloManager.makePayload(nowMs);
+  HelloPayload hello = helloManager.makePayload(nowMs);
+  // Route advertised to neighbors for their own route selection.
+  hello.hopsToGround = router.hopsToGround();
+  hello.nextHop = router.nextHop();
   uint8_t payload[kHelloPayloadSize];
   const ProtocolError error =
       encodeHelloPayload(hello, payload, sizeof(payload));
@@ -152,16 +158,29 @@ bool sendTelemetry(uint32_t nowMs) {
     Serial.println(protocolErrorName(error));
     return false;
   }
-  // Telemetry is addressed to the configured Ground Station, unlike broadcast
-  // HELLO discovery traffic.
-  if (!transmitPayload(PacketType::Telemetry, nodeConfig.groundStationId,
+  // No route: sample is skipped until the next interval.
+  if (!router.hasRoute()) {
+    Serial.println("[MESH] No route to Ground Station - telemetry not sent");
+    telemetryManager.markSent(nowMs);
+    return false;
+  }
+
+  // Own packet recorded so an echoed copy is not relayed.
+  router.alreadySeen(telemetry.originatingNodeId, telemetry.sequenceNumber,
+                     telemetry.timestampMs);
+
+  // Destination is the next hop: the Ground Station when in direct range,
+  // otherwise a relay drone.
+  if (!transmitPayload(PacketType::Telemetry, router.nextHop(),
                        payload, sizeof(payload), nowMs)) {
     return false;
   }
   telemetryManager.markSent(nowMs);
   Serial.print("[Node ");
   Serial.print(nodeConfig.nodeId);
-  Serial.print("] TELEMETRY transmitted, sequence ");
+  Serial.print("] TELEMETRY transmitted to Node ");
+  Serial.print(router.nextHop());
+  Serial.print(", sequence ");
   Serial.println(telemetry.sequenceNumber);
   return true;
 }
@@ -282,21 +301,57 @@ void printNeighborTable() {
   }
 }
 
-void handleTelemetry(const DecodedPacket& packet) {
-  // As with HELLO, the origin inside the payload must agree with the common
-  // header source. This prevents one drone's data from being labeled as another.
+void handleTelemetry(const DecodedPacket& packet, uint32_t nowMs) {
+  // Telemetry addressed to this node: the Ground Station displays it, any
+  // other node relays it to its own next hop.
   TelemetryData telemetry;
   const ProtocolError error = decodeTelemetryPayload(
       packet.payload, packet.header.payloadLength, telemetry);
-  if (error != ProtocolError::None ||
-      telemetry.originatingNodeId != packet.header.sourceNodeId) {
+  if (error != ProtocolError::None) {
     Serial.println("[PROTOCOL] Invalid telemetry ignored");
     return;
   }
+  // The header source is the last relay; the originating drone is
+  // telemetry.originatingNodeId.
+  if (router.alreadySeen(telemetry.originatingNodeId, telemetry.sequenceNumber,
+                         telemetry.timestampMs)) {
+    return;
+  }
+
   if (nodeConfig.role == NodeRole::GroundStation) {
-    // Drone profiles currently consume no addressed telemetry. The Ground
-    // Station is the Phase 2 display endpoint.
+    // Last-hop neighbor is shown to confirm the path taken.
+    Serial.print("[GROUND] Received via Node ");
+    Serial.println(packet.header.sourceNodeId);
     printTelemetry(telemetry);
+    return;
+  }
+
+  // Relay: payload forwarded unchanged.
+  if (!router.hasRoute()) {
+    Serial.print("[MESH] Dropped Drone ");
+    Serial.print(telemetry.originatingNodeId);
+    Serial.println(" telemetry - no route");
+    return;
+  }
+  Serial.print("[MESH] RELAY Drone ");
+  Serial.print(telemetry.originatingNodeId);
+  Serial.print(" telemetry -> Node ");
+  Serial.println(router.nextHop());
+  // Dropped if the radio is busy; the origin sends a new sample every 2 s.
+  transmitPayload(PacketType::Telemetry, router.nextHop(), packet.payload,
+                  packet.header.payloadLength, nowMs);
+}
+
+void printRoute() {
+  // Prints the current route, e.g. "[MESH] ROUTE -> via Node 2 (2 hops to ground)".
+  if (router.hasRoute()) {
+    Serial.print("[MESH] ROUTE -> via Node ");
+    Serial.print(router.nextHop());
+    Serial.print(" (");
+    Serial.print(router.hopsToGround());
+    Serial.println(" hops to ground)");
+  } else {
+    Serial.println("[MESH] ROUTE -> NONE (no path to ground)");
   }
 }
 
@@ -328,7 +383,7 @@ void handleReceivedPacket(const TransportPacket& radioPacket,
       handleHello(packet, radioPacket, nowMs);
       break;
     case PacketType::Telemetry:
-      handleTelemetry(packet);
+      handleTelemetry(packet, nowMs);
       break;
   }
 }
@@ -365,18 +420,12 @@ void setup() {
   // All managers receive one consistent startup time and the same NodeConfig.
   const uint32_t nowMs = millis();
   neighborTable.begin(nodeConfig.nodeId, nodeConfig.neighborTimeoutMs);
+  router.begin(nodeConfig.nodeId,
+               nodeConfig.role == NodeRole::GroundStation);
   helloManager.begin(nodeConfig, nowMs);
   if (!telemetryManager.begin(nodeConfig, Serial, nowMs)) {
     stopWithMessage("Telemetry provider failed to initialize.");
   }
-#if ANDY_TELEMETRY_SOURCE == ANDY_TELEMETRY_MAVLINK && \
-    ANDY_MAVLINK_SELF_TEST
-  // This optional startup check sends generated frames through the parser before
-  // normal radio operation. It is normally disabled after software validation.
-  if (!runMavlinkSyntheticTest(telemetryProvider, nowMs, Serial)) {
-    stopWithMessage("MAVLink synthetic parser self-test failed.");
-  }
-#endif
   if (!radioManager.begin(nodeConfig.radio, Serial)) {
     stopWithMessage("Radio failed to initialize; firmware halted.");
   }
@@ -406,6 +455,11 @@ void loop() {
   for (size_t i = 0; i < lostCount && i < kMaxNeighbors; ++i) {
     Serial.print("[MESH] WARNING: Node "); Serial.print(lostNodes[i]);
     Serial.println(" heartbeat timeout; marked LOST");
+  }
+
+  // Route re-evaluated after timeouts so a LOST next hop is replaced.
+  if (router.update(neighborTable)) {
+    printRoute();
   }
 
   // Full table output is diagnostic only. count avoids printing an empty table,

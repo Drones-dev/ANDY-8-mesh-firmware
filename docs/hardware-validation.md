@@ -1,7 +1,41 @@
 # Hardware Validation
 
-The original sketches under `firmware/ping-test/` remain the known-working radio
+How to bring the mesh firmware up on the real boards. Multi-hop routing has been
+tested in simulation (see [simulation.md](simulation.md)); this document covers
+the hardware steps that come next.
+
+## Hardware
+
+- Node: Seeed XIAO ESP32S3 + Wio-SX1262 kit (915 MHz, US band)
+- Library: [RadioLib](https://github.com/jgromes/RadioLib)
+- Language: C/C++ (Arduino framework for ESP32-S3)
+- Radio settings (mesh firmware): 915 MHz, 125 kHz bandwidth, SF7, coding rate
+  4/7, 12 dBm, preamble 8, 1.8 V TCXO. The ping-test sketches use SF9; both of
+  their boards match each other, so the ping test still works as a reference.
+- Flight controller: MicoAir743v2-AIO-45A (`micoair_h743-v2` PX4 target), ESP32 on UART4/TELEM2
+- Motors: EMAX ECO II 2004 3000KV (controlled only by PX4)
+- GPS/compass: HGLRC M100-5883 (connected only to the flight controller)
+
+## Ping test (run first)
+
+The original sketches under `firmware/ping-test/` are the known-working radio
 reference. Run them first whenever wiring or radio behavior is in doubt.
+
+1. Install Arduino IDE 2.x and the **esp32 by Espressif Systems** board package, then the
+   **RadioLib** library.
+2. Select **Tools > Board > esp32 > XIAO_ESP32S3** and set **USB CDC On Boot: Enabled**.
+3. Upload `drone1` to one board and `groundStationPingTest` to the other.
+4. Open the Serial Monitor at **115200 baud** on the Ground Station.
+
+Expected Ground Station output:
+
+```
+Ground Station ready.
+Ping #1 -> sending PING to Drone 1
+LINK OK - Drone 1 answered. Signal strength (RSSI): -34.00 dBm
+```
+
+Unplug Drone 1 and after three missed pings it prints `*** NO SIGNAL from Drone 1 ***`.
 
 ## Build one mesh node
 
@@ -18,17 +52,39 @@ reference. Run them first whenever wiring or radio behavior is in doubt.
 Each board must have a unique ID. Build and upload the same sketch separately for
 each board, changing only its local `NodeBuildConfig.h`.
 
+The firmware uses nonblocking radio receive/transmit and `millis()` scheduling.
+Each node broadcasts a HELLO every 2 seconds carrying its hop count to the Ground
+Station and its next hop, keeps a table of direct neighbors, and marks a
+neighbor lost after 5 seconds without a HELLO. Each drone sends telemetry to
+its best neighbor (fewest hops, then strongest RSSI, never a neighbor that
+relays through it), and relays other drones' telemetry the same way until it
+reaches the Ground Station.
+
 ## Phase A acceptance checks
 
-- Every active board logs a HELLO about once per second.
+- Every active board logs a HELLO about every 2 seconds.
 - A receiver adds only nodes whose HELLO it directly receives.
 - The neighbor table shows role, RSSI, SNR, status, and HELLO count.
-- Removing power from a neighbor changes it to `LOST` after about five seconds.
+- Removing power from a neighbor changes it to `LOST` after about 5 seconds (two missed HELLOs plus margin).
 - Restoring power changes it back to `ACTIVE`.
 - Each drone sends simulated telemetry about every two seconds.
 - The Ground Station reports the correct originating ID and does not mix values
   or sequence numbers between drones.
-- The original PING/PONG sketches still produce the README's expected output.
+- The original PING/PONG sketches still produce the expected output above.
+
+## Phase B acceptance checks (multi-hop, pending)
+
+Place the boards so the Ground Station hears only Drone 1, Drone 1 hears
+Drone 2, and Drone 2 hears Drone 3 (distance, walls, or reduced transmit power).
+
+- Each drone reports a route: Drone 1 via Ground Station (1 hop), Drone 2 via
+  Drone 1 (2 hops), Drone 3 via Drone 2 (3 hops).
+- The Ground Station receives Drone 3's telemetry, relayed by Drone 1.
+- With a second path available, removing power from the relay in use reroutes
+  the drone within about 5 seconds, and telemetry resumes.
+- Check range at SF7: the mesh uses a faster setting than the SF9 ping test,
+  so it reaches less far. Confirm each link before relying on it.
+- A relayed packet arrives once (no duplicates at the Ground Station).
 
 ## MAVLink UART4 wiring — verify before enabling
 
@@ -68,18 +124,6 @@ The provider parses `HEARTBEAT`, `GLOBAL_POSITION_INT`, `GPS_RAW_INT`,
 freshness timer. Stale or missing real values are marked unavailable and are
 never replaced with simulated values.
 
-## Synthetic MAVLink parser check
-
-With MAVLink mode configured, define `ANDY_MAVLINK_SELF_TEST 1`. At startup the
-firmware generates HEARTBEAT, GLOBAL_POSITION_INT, and VFR_HUD frames, converts
-them to raw bytes, feeds those bytes through the same parser used by UART4, and
-prints `[MAVLINK SELF-TEST] PASS` or halts on failure.
-
-Disable the self-test for flight testing. The synthetic check validates parsing
-and field mapping, but it does not validate the physical UART4 pins, electrical
-levels, PX4 stream configuration, or behavior in flight. Those items remain
-hardware validation work.
-
 ## Packet format
 
 All multi-byte integers use network byte order (big endian). No raw C++ structs
@@ -87,50 +131,12 @@ are transmitted.
 
 The 13-byte common header contains two magic bytes, protocol version, packet
 type, source ID, destination ID, 16-bit sequence number, 32-bit uptime, and
-8-bit payload length. HELLO is 7 bytes; telemetry is 32 bytes (including heading
-in centidegrees and GPS fix status). RadioLib's LoRa
-CRC protects each over-the-air frame.
+8-bit payload length. HELLO is 9 bytes (including the sender's hop count to the
+Ground Station and its next hop); telemetry is 32 bytes (including heading in
+centidegrees and GPS fix status), so a telemetry packet is 45 bytes. RadioLib's
+LoRa CRC protects each over-the-air frame.
 
-See [hardware-compatibility.md](hardware-compatibility.md) for verified board,
-motor, GPS/compass, wiring, PX4 target, and remaining validation details.
+## Simulation
 
-## PX4 SIH and mesh simulation
-
-The PC executable is ordinary C++ software; it does not try to run Arduino code
-inside PX4. It reuses the packet serializer, telemetry format, direct-neighbor
-table, heartbeat timeout, and MAVLink decoder used by hardware mode.
-
-```sh
-./scripts/setup-simulation.sh
-./scripts/start-px4-sih.sh /path/to/PX4-Autopilot
-# in another terminal
-./build/andy_mesh_sim
-```
-
-PX4's official SIH command is `make px4_sitl_sih sihsim_quadx`; its official
-multi-instance launcher command is
-`./Tools/simulation/sitl_multiple_run.sh 3 sihsim_quadx px4_sitl_sih`.
-Instances 0-2 send offboard MAVLink to UDP ports 14540-14542, which map to mesh
-nodes 1-3. See <https://docs.px4.io/main/en/sim_sih/>.
-
-The default radio topology is `0 <-> 1 <-> 2 <-> 3`, with different RSSI, SNR,
-and latency values on each direct link. These values are test inputs, not an
-SX1262 propagation model. `SimulatedRadioNetwork` also supports per-link enable,
-loss percentage, endpoint disconnect, and restoration. The automated test
-verifies discovery, restricted reachability, timeout, and recovery.
-
-Useful controls are `--loss-percent 10`, `--disable-link 1 2`,
-`--disconnect-node 2`, and `--failure-demo` (disconnect node 2 at five seconds,
-restore it at twelve seconds). `--duration-ms` makes scripted runs terminate.
-
-Important limitation: multi-hop forwarding is not implemented. Consequently,
-node 1 telemetry can reach ground node 0 in the line topology, while nodes 2 and
-3 cannot yet relay telemetry through intermediate nodes. HELLO packets remain
-strictly direct-neighbor observations. Do not interpret successful neighbor
-discovery as end-to-end routing.
-
-PX4 recommends Ubuntu for development; SIH is the lightest headless option.
-WSL2 can build/run PX4 simulation, but host networking/firewall configuration
-may be needed and USB flashing is a separate concern. Official setup:
-<https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu>.
-
+The PC simulator, PX4 SIH setup, and dashboard are described in
+[simulation.md](simulation.md).
