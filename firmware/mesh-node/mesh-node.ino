@@ -16,13 +16,21 @@
     5. Select the next hop toward the Ground Station (Router).
     6. Send telemetry to the next hop and relay telemetry addressed to this
        node from other drones.
+    7. Ground Station: read "LAND <id>" / "LAND ALL" typed in the Serial
+       Monitor (line ending: Newline) and flood the command to the drones.
+    8. Drones: relay flooded commands, pass LAND to the flight controller over
+       MAVLink, and route the flight controller's answer back to the ground.
 */
 
 #include <Arduino.h>  // millis(), delay(), Serial, and basic Arduino types.
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Each project header owns one focused responsibility. This keeps the main
 // sketch readable and prevents radio, protocol, and telemetry details from being
 // mixed into one very large loop.
+#include "CommandExecutor.h"
 #include "HelloManager.h"
 #include "MavlinkTelemetryProvider.h"
 #include "NeighborTable.h"
@@ -69,6 +77,45 @@ TelemetryManager telemetryManager(telemetryProvider);
 uint16_t packetSequenceNumber = 0;
 uint32_t nextNeighborTablePrintMs = 0;
 
+// Drone side: carries one mesh command through to the flight controller.
+CommandExecutor commandExecutor;
+
+// Ground Station side. The command sequence starts at a random value so drones
+// that still remember commands from before a Ground Station reboot do not
+// discard new commands as duplicates.
+uint16_t groundCommandSequence = 0;
+char consoleLine[32];
+size_t consoleLength = 0;
+
+// The Ground Station sends each command this many times; drones run it once.
+const uint8_t kCommandRepeats = 3;
+const uint32_t kCommandRepeatIntervalMs = 700;
+// Relayed commands wait a short random time so two relays that heard the same
+// copy do not transmit over each other.
+const uint32_t kRelayJitterMinMs = 30;
+const uint32_t kRelayJitterMaxMs = 250;
+// Every hop sends relayed commands and replies twice. Each node forwards only
+// the first copy it hears, so without this one lost frame would end the flood.
+const uint8_t kHopRepeats = 2;
+const uint32_t kHopRepeatIntervalMs = 400;
+// A queued reply with no route to ground is dropped after this long.
+const uint32_t kOutboundExpiryMs = 10000;
+
+// Command and CommandAck frames wait here until the radio is free, so a busy
+// radio delays them instead of dropping them.
+struct OutboundFrame {
+  bool used;
+  PacketType type;
+  bool viaNextHop;  // Destination is chosen at send time from the router.
+  NodeId destination;
+  uint8_t payload[kMaxPayloadSize];
+  uint8_t payloadLength;
+  uint32_t notBeforeMs;
+  uint32_t expiresMs;
+};
+const size_t kOutboundSlots = 10;
+OutboundFrame outbound[kOutboundSlots];
+
 // millis() is a 32-bit counter and eventually wraps to zero. Testing a signed
 // subtraction keeps deadline checks correct across that wraparound.
 bool timeReached(uint32_t nowMs, uint32_t deadlineMs) {
@@ -113,6 +160,57 @@ bool transmitPayload(PacketType type,
   }
   // RadioManager starts asynchronous transmission and returns immediately.
   return radioManager.send(packet, packetLength);
+}
+
+bool queueFrame(PacketType type, bool viaNextHop, NodeId destination,
+                const uint8_t* payload, uint8_t payloadLength,
+                uint32_t notBeforeMs) {
+  for (size_t i = 0; i < kOutboundSlots; ++i) {
+    OutboundFrame& frame = outbound[i];
+    if (frame.used) continue;
+    frame.used = true;
+    frame.type = type;
+    frame.viaNextHop = viaNextHop;
+    frame.destination = destination;
+    memcpy(frame.payload, payload, payloadLength);
+    frame.payloadLength = payloadLength;
+    frame.notBeforeMs = notBeforeMs;
+    frame.expiresMs = notBeforeMs + kOutboundExpiryMs;
+    return true;
+  }
+  Serial.println("[MESH] Outbound queue full; command frame dropped");
+  return false;
+}
+
+void queueHopRepeats(PacketType type, bool viaNextHop, NodeId destination,
+                     const uint8_t* payload, uint8_t payloadLength,
+                     uint32_t firstMs) {
+  for (uint8_t i = 0; i < kHopRepeats; ++i) {
+    queueFrame(type, viaNextHop, destination, payload, payloadLength,
+               firstMs + i * kHopRepeatIntervalMs);
+  }
+}
+
+// Sends at most one due frame. Returns true when the radio was used.
+bool serviceOutbound(uint32_t nowMs) {
+  for (size_t i = 0; i < kOutboundSlots; ++i) {
+    OutboundFrame& frame = outbound[i];
+    if (!frame.used || !timeReached(nowMs, frame.notBeforeMs)) continue;
+    if (frame.viaNextHop && !router.hasRoute()) {
+      if (timeReached(nowMs, frame.expiresMs)) {
+        frame.used = false;
+        Serial.println("[MESH] Command reply dropped - no route to ground");
+      }
+      continue;
+    }
+    const NodeId destination =
+        frame.viaNextHop ? router.nextHop() : frame.destination;
+    frame.used = false;
+    transmitPayload(frame.type, destination, frame.payload,
+                    frame.payloadLength, nowMs);
+    return true;
+  }
+  return false;
 }
 
 bool sendHello(uint32_t nowMs) {
@@ -342,6 +440,197 @@ void handleTelemetry(const DecodedPacket& packet, uint32_t nowMs) {
                   packet.header.payloadLength, nowMs);
 }
 
+void printCommandTarget(NodeId target) {
+  if (target == kBroadcastNodeId) {
+    Serial.print("ALL drones");
+  } else {
+    Serial.print("Drone ");
+    Serial.print(target);
+  }
+}
+
+void handleCommand(const DecodedPacket& packet, uint32_t nowMs) {
+  CommandPayload command;
+  if (decodeCommandPayload(packet.payload, packet.header.payloadLength,
+                           command) != ProtocolError::None) {
+    Serial.println("[PROTOCOL] Invalid command ignored");
+    return;
+  }
+  // The Ground Station hears its own command echoed back by relays.
+  if (nodeConfig.role == NodeRole::GroundStation) return;
+  if (router.commandAlreadySeen(PacketType::Command, command.originNodeId,
+                                command.commandSequence)) {
+    return;
+  }
+
+  if (command.targetNodeId == nodeConfig.nodeId ||
+      command.targetNodeId == kBroadcastNodeId) {
+    Serial.print("[COMMAND] ");
+    Serial.print(meshCommandName(command.command));
+    Serial.print(" received from Node ");
+    Serial.print(command.originNodeId);
+    Serial.print(" via Node ");
+    Serial.print(packet.header.sourceNodeId);
+    Serial.print(" (cmd ");
+    Serial.print(command.commandSequence);
+    Serial.println(")");
+    commandExecutor.start(command.command, command.commandSequence, nowMs);
+  }
+
+  // A command for one specific drone stops at that drone; everything else
+  // keeps flooding until its hop budget runs out.
+  if (command.targetNodeId == nodeConfig.nodeId || command.hopsRemaining <= 1) {
+    return;
+  }
+  command.hopsRemaining--;
+  uint8_t payload[kCommandPayloadSize];
+  if (encodeCommandPayload(command, payload, sizeof(payload)) !=
+      ProtocolError::None) {
+    return;
+  }
+  const uint32_t jitter =
+      random(kRelayJitterMinMs, kRelayJitterMaxMs + 1);
+  queueHopRepeats(PacketType::Command, false, kBroadcastNodeId, payload,
+                  sizeof(payload), nowMs + jitter);
+  Serial.print("[MESH] RELAY ");
+  Serial.print(meshCommandName(command.command));
+  Serial.print(" for ");
+  printCommandTarget(command.targetNodeId);
+  Serial.println();
+}
+
+void handleCommandAck(const DecodedPacket& packet, uint32_t nowMs) {
+  CommandAckPayload ack;
+  if (decodeCommandAckPayload(packet.payload, packet.header.payloadLength,
+                              ack) != ProtocolError::None) {
+    Serial.println("[PROTOCOL] Invalid command reply ignored");
+    return;
+  }
+  if (router.commandAlreadySeen(PacketType::CommandAck, ack.droneNodeId,
+                                ack.commandSequence)) {
+    return;
+  }
+  if (nodeConfig.role == NodeRole::GroundStation) {
+    Serial.print("[GROUND] Drone ");
+    Serial.print(ack.droneNodeId);
+    Serial.print(' ');
+    Serial.print(meshCommandName(ack.command));
+    Serial.print(' ');
+    Serial.print(commandResultName(ack.result));
+    Serial.print(" (cmd ");
+    Serial.print(ack.commandSequence);
+    Serial.print(", via Node ");
+    Serial.print(packet.header.sourceNodeId);
+    Serial.println(")");
+    return;
+  }
+  Serial.print("[MESH] RELAY Drone ");
+  Serial.print(ack.droneNodeId);
+  Serial.println(" command reply");
+  queueHopRepeats(PacketType::CommandAck, true, 0, packet.payload,
+                  packet.header.payloadLength, nowMs);
+}
+
+void serviceCommandExecutor(uint32_t nowMs) {
+  uint8_t result = 0;
+  if (commandExecutor.active() && telemetryProvider.takeLandAck(result)) {
+    commandExecutor.finish(result);
+  }
+  uint8_t attempt = 0;
+  if (commandExecutor.attemptDue(nowMs, attempt)) {
+    if (telemetryProvider.sendLandCommand(attempt, nowMs)) {
+      Serial.print("[COMMAND] LAND sent to flight controller (try ");
+      Serial.print(attempt + 1);
+      Serial.println(")");
+    } else {
+      commandExecutor.finish(kCommandResultNoAutopilot);
+    }
+  }
+  CommandAckPayload report;
+  if (!commandExecutor.takeReport(report)) return;
+  Serial.print("[COMMAND] ");
+  Serial.print(meshCommandName(report.command));
+  Serial.print(" result: ");
+  Serial.println(commandResultName(report.result));
+  // The executing drone marks its own reply as seen so a relay echoing it
+  // back is not forwarded a second time.
+  router.commandAlreadySeen(PacketType::CommandAck, report.droneNodeId,
+                            report.commandSequence);
+  uint8_t payload[kCommandAckPayloadSize];
+  if (encodeCommandAckPayload(report, payload, sizeof(payload)) ==
+      ProtocolError::None) {
+    queueHopRepeats(PacketType::CommandAck, true, 0, payload, sizeof(payload),
+                    nowMs);
+  }
+}
+
+void printConsoleHelp() {
+  Serial.println("[GROUND] Commands: LAND <drone id>   LAND ALL");
+}
+
+void sendGroundCommand(MeshCommand type, NodeId target, uint32_t nowMs) {
+  const CommandPayload command{nodeConfig.nodeId, target, type,
+                               ++groundCommandSequence, kMaxHops};
+  uint8_t payload[kCommandPayloadSize];
+  if (encodeCommandPayload(command, payload, sizeof(payload)) !=
+      ProtocolError::None) {
+    Serial.println("[GROUND] Could not encode command");
+    return;
+  }
+  for (uint8_t i = 0; i < kCommandRepeats; ++i) {
+    queueFrame(PacketType::Command, false, kBroadcastNodeId, payload,
+               sizeof(payload), nowMs + i * kCommandRepeatIntervalMs);
+  }
+  Serial.print("[GROUND] ");
+  Serial.print(meshCommandName(type));
+  Serial.print(" -> ");
+  printCommandTarget(target);
+  Serial.print(" (cmd ");
+  Serial.print(command.commandSequence);
+  Serial.println(")");
+}
+
+void runConsoleLine(char* line, uint32_t nowMs) {
+  char* word = strtok(line, " \t");
+  if (word == nullptr) return;
+  if (strcmp(word, "LAND") != 0) {
+    printConsoleHelp();
+    return;
+  }
+  char* targetText = strtok(nullptr, " \t");
+  if (targetText == nullptr || strtok(nullptr, " \t") != nullptr) {
+    printConsoleHelp();
+    return;
+  }
+  if (strcmp(targetText, "ALL") == 0) {
+    sendGroundCommand(MeshCommand::Land, kBroadcastNodeId, nowMs);
+    return;
+  }
+  char* end = nullptr;
+  const unsigned long id = strtoul(targetText, &end, 10);
+  if (*end != '\0' || id == 0 || id > kHighestSupportedNodeId) {
+    Serial.println("[GROUND] Drone ID must be 1-31 or ALL");
+    return;
+  }
+  sendGroundCommand(MeshCommand::Land, static_cast<NodeId>(id), nowMs);
+}
+
+void serviceGroundConsole(uint32_t nowMs) {
+  while (Serial.available() > 0) {
+    const char ch = static_cast<char>(Serial.read());
+    if (ch == '\n' || ch == '\r') {
+      if (consoleLength > 0) {
+        consoleLine[consoleLength] = '\0';
+        runConsoleLine(consoleLine, nowMs);
+      }
+      consoleLength = 0;
+    } else if (consoleLength < sizeof(consoleLine) - 1) {
+      consoleLine[consoleLength++] =
+          static_cast<char>(toupper(static_cast<unsigned char>(ch)));
+    }
+  }
+}
+
 void printRoute() {
   // Prints the current route, e.g. "[MESH] ROUTE -> via Node 2 (2 hops to ground)".
   if (router.hasRoute()) {
@@ -385,6 +674,12 @@ void handleReceivedPacket(const TransportPacket& radioPacket,
     case PacketType::Telemetry:
       handleTelemetry(packet, nowMs);
       break;
+    case PacketType::Command:
+      handleCommand(packet, nowMs);
+      break;
+    case PacketType::CommandAck:
+      handleCommandAck(packet, nowMs);
+      break;
   }
 }
 
@@ -423,6 +718,9 @@ void setup() {
   router.begin(nodeConfig.nodeId,
                nodeConfig.role == NodeRole::GroundStation);
   helloManager.begin(nodeConfig, nowMs);
+  commandExecutor.begin(nodeConfig.nodeId);
+  randomSeed(esp_random());
+  groundCommandSequence = static_cast<uint16_t>(esp_random());
   if (!telemetryManager.begin(nodeConfig, Serial, nowMs)) {
     stopWithMessage("Telemetry provider failed to initialize.");
   }
@@ -433,6 +731,9 @@ void setup() {
   // Schedule diagnostic output with millis(); no delay is added to loop().
   nextNeighborTablePrintMs = nowMs + nodeConfig.neighborTableIntervalMs;
   Serial.println("Mesh node ready.");
+  if (nodeConfig.role == NodeRole::GroundStation) {
+    printConsoleHelp();
+  }
 }
 
 void loop() {
@@ -443,6 +744,12 @@ void loop() {
   // MAVLink update consumes at most 256 UART bytes; simulation update is empty.
   // Neither path waits for the next telemetry transmit deadline.
   telemetryManager.update(nowMs);
+
+  if (nodeConfig.role == NodeRole::GroundStation) {
+    serviceGroundConsole(nowMs);
+  } else {
+    serviceCommandExecutor(nowMs);
+  }
 
   // poll returns true only when a complete LoRa packet was read successfully.
   TransportPacket radioPacket;
@@ -472,6 +779,10 @@ void loop() {
 
   if (!radioManager.readyToSend()) {
     // Receiving and timeout work above still ran even when the radio is busy.
+    return;
+  }
+  // Commands and their replies go ahead of HELLO and telemetry.
+  if (serviceOutbound(nowMs)) {
     return;
   }
   if (helloManager.due(nowMs)) {

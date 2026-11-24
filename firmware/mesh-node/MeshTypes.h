@@ -46,11 +46,25 @@ enum class NodeRole : uint8_t {
 };
 
 // PacketType tells the receiver how to decode the bytes after the common packet
-// header. Phase 2 supports discovery (HELLO) and flight data (Telemetry).
+// header. Discovery (HELLO), flight data (Telemetry), Ground Station commands
+// flooded to the drones (Command), and each drone's reply (CommandAck).
 enum class PacketType : uint8_t {
   Hello = 1,
   Telemetry = 2,
+  Command = 3,
+  CommandAck = 4,
 };
+
+// Commands the Ground Station can flood through the mesh to the drones.
+enum class MeshCommand : uint8_t {
+  Land = 1,
+};
+
+// CommandAck results. Values below 250 are the flight controller's own
+// MAV_RESULT code (0 = accepted); the two values above it are mesh-side.
+constexpr uint8_t kCommandResultAccepted = 0;
+constexpr uint8_t kCommandResultNoAutopilot = 250;  // No PX4 heartbeat seen.
+constexpr uint8_t kCommandResultNoResponse = 251;   // No COMMAND_ACK received.
 
 // ACTIVE means HELLO beacons are arriving recently. LOST means the heartbeat
 // timeout expired, but the table keeps the entry for diagnostics and recovery.
@@ -148,6 +162,29 @@ inline const char* nodeRoleName(NodeRole role) {
       return "DRONE";
   }
   return "UNKNOWN";
+}
+
+inline const char* meshCommandName(MeshCommand command) {
+  switch (command) {
+    case MeshCommand::Land:
+      return "LAND";
+  }
+  return "UNKNOWN";
+}
+
+inline const char* commandResultName(uint8_t result) {
+  switch (result) {
+    case 0: return "ACCEPTED";
+    case 1: return "TEMPORARILY_REJECTED";
+    case 2: return "DENIED";
+    case 3: return "UNSUPPORTED";
+    case 4: return "FAILED";
+    case 5: return "IN_PROGRESS";
+    case 6: return "CANCELLED";
+    case kCommandResultNoAutopilot: return "NO_AUTOPILOT";
+    case kCommandResultNoResponse: return "NO_RESPONSE";
+    default: return "UNKNOWN";
+  }
 }
 
 inline const char* flightModeName(FlightMode mode) {

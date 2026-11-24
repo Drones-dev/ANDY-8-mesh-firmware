@@ -30,6 +30,8 @@ constexpr size_t kMaxPacketSize = kPacketHeaderSize + kMaxPayloadSize;
 // Includes the two routing bytes (hops to ground, next hop).
 constexpr size_t kHelloPayloadSize = 9;
 constexpr size_t kTelemetryPayloadSize = 32;
+constexpr size_t kCommandPayloadSize = 6;
+constexpr size_t kCommandAckPayloadSize = 5;
 
 // Every packet begins with this information. Source and destination identify
 // who sent the packet and who should process it. The sequence number helps track
@@ -86,6 +88,24 @@ struct TelemetryData {
 
 // decodePacket points payload at bytes inside the caller's received buffer. It
 // does not allocate or copy another 64-byte array, which saves ESP32 memory.
+// Flooded from the Ground Station. originNodeId plus commandSequence identify
+// one command across every relay; hopsRemaining bounds the flood.
+struct CommandPayload {
+  NodeId originNodeId;
+  NodeId targetNodeId;  // One drone, or kBroadcastNodeId for every drone.
+  MeshCommand command;
+  uint16_t commandSequence;
+  uint8_t hopsRemaining;
+};
+
+// Routed back to the Ground Station by the drone that executed the command.
+struct CommandAckPayload {
+  NodeId droneNodeId;
+  uint16_t commandSequence;
+  MeshCommand command;
+  uint8_t result;
+};
+
 struct DecodedPacket {
   PacketHeader header;
   const uint8_t* payload;
@@ -143,5 +163,21 @@ ProtocolError decodeTelemetryPayload(const uint8_t* payload,
                                      TelemetryData& telemetry);
 
 bool isValidTelemetry(const TelemetryData& telemetry);
+
+ProtocolError encodeCommandPayload(const CommandPayload& command,
+                                   uint8_t* output,
+                                   size_t outputCapacity);
+
+ProtocolError decodeCommandPayload(const uint8_t* payload,
+                                   size_t payloadLength,
+                                   CommandPayload& command);
+
+ProtocolError encodeCommandAckPayload(const CommandAckPayload& ack,
+                                      uint8_t* output,
+                                      size_t outputCapacity);
+
+ProtocolError decodeCommandAckPayload(const uint8_t* payload,
+                                      size_t payloadLength,
+                                      CommandAckPayload& ack);
 
 }  // namespace AndyMesh

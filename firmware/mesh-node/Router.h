@@ -19,7 +19,8 @@
   When the selected neighbor times out (LOST), the next update() selects a
   replacement from the remaining ACTIVE neighbors.
 
-  Also provides the duplicate filter used when relaying telemetry.
+  Also provides the duplicate filters used when relaying telemetry and
+  flooded commands.
 */
 namespace AndyMesh {
 
@@ -45,6 +46,10 @@ class Router {
   // rebooted drone (sequence restarted) are not mistaken for duplicates.
   bool alreadySeen(NodeId origin, uint16_t sequence, uint32_t timestampMs);
 
+  // Separate history for Command and CommandAck packets, so a burst of
+  // telemetry cannot push a command out and let a repeated copy run twice.
+  bool commandAlreadySeen(PacketType type, NodeId origin, uint16_t sequence);
+
  private:
   NodeId myId_ = 0;
   bool isGroundStation_ = false;
@@ -58,6 +63,13 @@ class Router {
   uint32_t seenTimestamp_[kSeenSize] = {};
   bool seenUsed_[kSeenSize] = {};
   int seenNext_ = 0;
+
+  static const int kCommandSeenSize = 16;
+  PacketType commandSeenType_[kCommandSeenSize] = {};
+  NodeId commandSeenOrigin_[kCommandSeenSize] = {};
+  uint16_t commandSeenSequence_[kCommandSeenSize] = {};
+  bool commandSeenUsed_[kCommandSeenSize] = {};
+  int commandSeenNext_ = 0;
 };
 
 }  // namespace AndyMesh

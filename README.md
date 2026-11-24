@@ -30,6 +30,7 @@ multi-hop mesh on the real radios and flight controllers is the next phase.
 | Route selection (fewest hops, then strongest signal) | Done (simulation tested) |
 | Relay failure detection and reroute (5 s target) | Done (simulation tested, ~3-5 s) |
 | Ground Station test dashboard | Done (map, routes, telemetry, events) |
+| Mesh LAND command (`LAND <id>` / `LAND ALL`) with flight-controller reply | Done (simulation tested; hardware validation pending) |
 
 ## Known limitations
 
@@ -113,6 +114,11 @@ forwards localhost).
   the dashboard), and about 3-5 s later Drone 3 reroutes through Drone 1. Type
   `2` and Enter again to turn it back on.
 - **LAND:** all three drones land where they are.
+- **LAND command:** type `LAND 2` (or `LAND ALL`) and Enter in terminal 2. The
+  Ground Station floods the command through the mesh, Drone 2 sends MAVLink
+  `MAV_CMD_NAV_LAND` to its PX4, and terminal 2 prints
+  `[GROUND] Drone 2 LAND ACCEPTED`. `fly_scenario.py` keeps commanding the
+  drones, so it can override a LAND sent while it is running.
 
 Terminal 2 also prints every relay, route change, and lost neighbor.
 
@@ -137,6 +143,7 @@ tests/
   protocol_tests.cpp           Packet serialization and validation
   simulation_tests.cpp         Simulated links, discovery, timeout, recovery
   routing_tests.cpp            Route selection, reroute, loop prevention, duplicates
+  command_tests.cpp            Command packets, command duplicates, LAND retries
 simulation/
   mesh_sim.cpp                 PC mesh simulator (4 nodes, PX4 MAVLink input)
   SimulatedRadio.h/.cpp        Simulated radio links
@@ -153,6 +160,36 @@ docs/
 
 `build/` and `simulation/third_party/` (MAVLink headers) are generated locally
 and are not committed.
+
+## Mesh LAND command
+
+On the Ground Station's Serial Monitor (115200 baud, line ending **Newline**):
+
+```
+LAND 2      land Drone 2 where it is
+LAND ALL    land every drone
+```
+
+1. The Ground Station sends a Command packet to broadcast three times, 700 ms
+   apart. Each drone that hears it relays it once (two copies, random 30-250 ms
+   delay), up to 5 hops.
+2. The target drone sends `COMMAND_LONG` / `MAV_CMD_NAV_LAND` (land at the
+   current position) to PX4 on the same UART as telemetry (ESP32 TX GPIO43 to
+   TELEM2 RX), up to five times 500 ms apart until PX4 answers with
+   `COMMAND_ACK`.
+3. The drone routes the result back to the Ground Station, which prints, for
+   example, `[GROUND] Drone 2 LAND ACCEPTED (cmd 41213, via Node 1)`.
+
+| Result | Meaning |
+|--------|---------|
+| `ACCEPTED` | PX4 switched to Land |
+| `DENIED`, `FAILED`, `TEMPORARILY_REJECTED` | PX4 refused (for example, no position estimate) |
+| `NO_AUTOPILOT` | The node has not heard a PX4 heartbeat in the last 3 s (check the TX/RX wires) |
+| `NO_RESPONSE` | PX4 was heard but did not answer |
+
+No reply within about 3 s means the command or the reply was lost; type the
+command again. Telemetry also shows `Mode: LAND` once PX4 is landing.
+All four nodes must run this firmware: older firmware ignores Command packets.
 
 ## Documentation
 

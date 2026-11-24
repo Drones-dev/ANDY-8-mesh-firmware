@@ -28,6 +28,33 @@ FlightMode mode(uint8_t m) {
   if (m & MAV_MODE_FLAG_MANUAL_INPUT_ENABLED) return FlightMode::Manual;
   return FlightMode::Unknown;
 }
+// PX4 packs its mode into custom_mode: main mode in bits 16-23, auto sub-mode
+// in bits 24-31 (px4_custom_mode.h).
+FlightMode px4Mode(uint32_t customMode) {
+  const uint8_t mainMode = (customMode >> 16) & 0xFF;
+  const uint8_t subMode = (customMode >> 24) & 0xFF;
+  switch (mainMode) {
+    case 1:  // MANUAL
+    case 5:  // ACRO
+      return FlightMode::Manual;
+    case 2:  // ALTCTL
+    case 3:  // POSCTL
+    case 7:  // STABILIZED
+      return FlightMode::Stabilized;
+    case 4:  // AUTO
+      if (subMode == 5) return FlightMode::ReturnToLaunch;
+      if (subMode == 6 || subMode == 9) return FlightMode::Land;  // LAND, PRECLAND
+      return FlightMode::Auto;
+    case 6:  // OFFBOARD
+      return FlightMode::Auto;
+    default:
+      return FlightMode::Unknown;
+  }
+}
+// Identity this node uses when commanding the flight controller; distinct
+// from QGroundControl's default system ID 255.
+constexpr uint8_t kMeshSystemId = 245;
+constexpr uint8_t kMeshComponentId = MAV_COMP_ID_ONBOARD_COMPUTER;
 }  // namespace
 MavlinkTelemetryDecoder::MavlinkTelemetryDecoder()
     : latest_{0,
@@ -73,12 +100,30 @@ void MavlinkTelemetryDecoder::ingestByte(uint8_t b, uint32_t now) {
   switch (msg.msgid) {
     // HEARTBEAT does not contain measurements. It tells us whether PX4 is armed
     // and supplies broad mode flags that fit the project's compact FlightMode.
+    // Only the autopilot's heartbeat counts; a GCS or peripheral heartbeat
+    // forwarded on the same link must not change armed state or command target.
     case MAVLINK_MSG_ID_HEARTBEAT: {
       mavlink_heartbeat_t m;
       mavlink_msg_heartbeat_decode(&msg, &m);
+      if (m.autopilot == MAV_AUTOPILOT_INVALID || m.type == MAV_TYPE_GCS) break;
       latest_.armed = (m.base_mode & MAV_MODE_FLAG_SAFETY_ARMED) != 0;
-      latest_.flightMode = mode(m.base_mode);
+      latest_.flightMode =
+          (m.autopilot == MAV_AUTOPILOT_PX4 &&
+           (m.base_mode & MAV_MODE_FLAG_CUSTOM_MODE_ENABLED) != 0)
+              ? px4Mode(m.custom_mode)
+              : mode(m.base_mode);
+      targetSystem_ = msg.sysid;
+      targetComponent_ = msg.compid;
       heartbeatMs_ = now;
+      break;
+    }
+    case MAVLINK_MSG_ID_COMMAND_ACK: {
+      mavlink_command_ack_t m;
+      mavlink_msg_command_ack_decode(&msg, &m);
+      if (m.command == MAV_CMD_NAV_LAND && msg.sysid == targetSystem_) {
+        landAckResult_ = m.result;
+        landAckPending_ = true;
+      }
       break;
     }
     // GLOBAL_POSITION_INT is preferred because it includes E7 coordinates,
@@ -208,6 +253,32 @@ bool MavlinkTelemetryDecoder::read(uint32_t now, TelemetryData& out) {
   out = latest_;
   return true;
 }
+bool MavlinkTelemetryDecoder::autopilotPresent(uint32_t now) const {
+  return fresh(now, heartbeatMs_, freshnessMs_);
+}
+size_t MavlinkTelemetryDecoder::packLandCommand(uint8_t confirmation,
+                                                uint32_t now, uint8_t* out,
+                                                size_t capacity) {
+  if (out == nullptr || capacity < MAVLINK_MAX_PACKET_LEN ||
+      !autopilotPresent(now))
+    return 0;
+  const mavlink_channel_t channel = static_cast<mavlink_channel_t>(
+      latest_.originatingNodeId % MAVLINK_COMM_NUM_BUFFERS);
+  mavlink_message_t msg;
+  // NaN yaw and position mean "keep current heading, land where you are".
+  mavlink_msg_command_long_pack_chan(kMeshSystemId, kMeshComponentId, channel,
+                                     &msg, targetSystem_, targetComponent_,
+                                     MAV_CMD_NAV_LAND, confirmation, 0, 0, 0,
+                                     NAN, NAN, NAN, NAN);
+  landAckPending_ = false;
+  return mavlink_msg_to_send_buffer(out, &msg);
+}
+bool MavlinkTelemetryDecoder::takeLandAck(uint8_t& result) {
+  if (!landAckPending_) return false;
+  landAckPending_ = false;
+  result = landAckResult_;
+  return true;
+}
 #else
 MavlinkTelemetryDecoder::MavlinkTelemetryDecoder()
     : latest_{},
@@ -224,5 +295,11 @@ MavlinkTelemetryDecoder::MavlinkTelemetryDecoder()
 void MavlinkTelemetryDecoder::begin(NodeId, uint32_t) {}
 void MavlinkTelemetryDecoder::ingestByte(uint8_t, uint32_t) {}
 bool MavlinkTelemetryDecoder::read(uint32_t, TelemetryData&) { return false; }
+bool MavlinkTelemetryDecoder::autopilotPresent(uint32_t) const { return false; }
+size_t MavlinkTelemetryDecoder::packLandCommand(uint8_t, uint32_t, uint8_t*,
+                                                size_t) {
+  return 0;
+}
+bool MavlinkTelemetryDecoder::takeLandAck(uint8_t&) { return false; }
 #endif
 }  // namespace AndyMesh
