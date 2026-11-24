@@ -24,6 +24,8 @@ class MavlinkTelemetryProvider : public TelemetryProvider {
   void update(uint32_t nowMs) override;
   bool read(uint32_t nowMs, TelemetryData& telemetry) override;
   const char* name() const override;
+  bool sendLandCommand(uint8_t confirmation, uint32_t nowMs) override;
+  bool takeLandAck(uint8_t& result) override;
 
   // Exposed so recorded or synthetic MAVLink byte streams can exercise the
   // same parser without a connected flight controller.

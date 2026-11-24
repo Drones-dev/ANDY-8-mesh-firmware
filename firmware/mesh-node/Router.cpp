@@ -96,4 +96,21 @@ bool Router::alreadySeen(NodeId origin, uint16_t sequence,
   return false;
 }
 
+bool Router::commandAlreadySeen(PacketType type, NodeId origin,
+                                uint16_t sequence) {
+  for (int i = 0; i < kCommandSeenSize; i++) {
+    if (commandSeenUsed_[i] && commandSeenType_[i] == type &&
+        commandSeenOrigin_[i] == origin &&
+        commandSeenSequence_[i] == sequence) {
+      return true;
+    }
+  }
+  commandSeenType_[commandSeenNext_] = type;
+  commandSeenOrigin_[commandSeenNext_] = origin;
+  commandSeenSequence_[commandSeenNext_] = sequence;
+  commandSeenUsed_[commandSeenNext_] = true;
+  commandSeenNext_ = (commandSeenNext_ + 1) % kCommandSeenSize;
+  return false;
+}
+
 }  // namespace AndyMesh

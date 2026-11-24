@@ -32,7 +32,8 @@ uint32_t readU32(const uint8_t* input) {
 // Only packet types understood by this protocol version are accepted. Without
 // this check, damaged type bytes could be sent to the wrong decoder.
 bool isKnownPacketType(PacketType type) {
-  return type == PacketType::Hello || type == PacketType::Telemetry;
+  return type == PacketType::Hello || type == PacketType::Telemetry ||
+         type == PacketType::Command || type == PacketType::CommandAck;
 }
 
 }  // namespace
@@ -313,6 +314,98 @@ ProtocolError decodeTelemetryPayload(const uint8_t* payload,
   if (payload[28] > 1 || !isValidTelemetry(telemetry)) {
     return ProtocolError::InvalidField;
   }
+  return ProtocolError::None;
+}
+
+namespace {
+bool isKnownCommand(uint8_t command) {
+  return command == static_cast<uint8_t>(MeshCommand::Land);
+}
+}  // namespace
+
+ProtocolError encodeCommandPayload(const CommandPayload& command,
+                                   uint8_t* output,
+                                   size_t outputCapacity) {
+  if (output == nullptr) {
+    return ProtocolError::NullArgument;
+  }
+  if (outputCapacity < kCommandPayloadSize) {
+    return ProtocolError::BufferTooSmall;
+  }
+  if (!isValidNodeId(command.originNodeId) ||
+      !isValidDestination(command.targetNodeId) ||
+      !isKnownCommand(static_cast<uint8_t>(command.command)) ||
+      command.hopsRemaining == 0) {
+    return ProtocolError::InvalidField;
+  }
+  // Command byte layout (6 bytes): origin, target, command, sequence (2),
+  // hops remaining.
+  output[0] = command.originNodeId;
+  output[1] = command.targetNodeId;
+  output[2] = static_cast<uint8_t>(command.command);
+  writeU16(output + 3, command.commandSequence);
+  output[5] = command.hopsRemaining;
+  return ProtocolError::None;
+}
+
+ProtocolError decodeCommandPayload(const uint8_t* payload,
+                                   size_t payloadLength,
+                                   CommandPayload& command) {
+  if (payload == nullptr) {
+    return ProtocolError::NullArgument;
+  }
+  if (payloadLength != kCommandPayloadSize) {
+    return ProtocolError::LengthMismatch;
+  }
+  if (!isValidNodeId(payload[0]) || !isValidDestination(payload[1]) ||
+      !isKnownCommand(payload[2]) || payload[5] == 0) {
+    return ProtocolError::InvalidField;
+  }
+  command.originNodeId = payload[0];
+  command.targetNodeId = payload[1];
+  command.command = static_cast<MeshCommand>(payload[2]);
+  command.commandSequence = readU16(payload + 3);
+  command.hopsRemaining = payload[5];
+  return ProtocolError::None;
+}
+
+ProtocolError encodeCommandAckPayload(const CommandAckPayload& ack,
+                                      uint8_t* output,
+                                      size_t outputCapacity) {
+  if (output == nullptr) {
+    return ProtocolError::NullArgument;
+  }
+  if (outputCapacity < kCommandAckPayloadSize) {
+    return ProtocolError::BufferTooSmall;
+  }
+  if (!isValidNodeId(ack.droneNodeId) ||
+      !isKnownCommand(static_cast<uint8_t>(ack.command))) {
+    return ProtocolError::InvalidField;
+  }
+  // CommandAck byte layout (5 bytes): drone, sequence (2), command, result.
+  output[0] = ack.droneNodeId;
+  writeU16(output + 1, ack.commandSequence);
+  output[3] = static_cast<uint8_t>(ack.command);
+  output[4] = ack.result;
+  return ProtocolError::None;
+}
+
+ProtocolError decodeCommandAckPayload(const uint8_t* payload,
+                                      size_t payloadLength,
+                                      CommandAckPayload& ack) {
+  if (payload == nullptr) {
+    return ProtocolError::NullArgument;
+  }
+  if (payloadLength != kCommandAckPayloadSize) {
+    return ProtocolError::LengthMismatch;
+  }
+  if (!isValidNodeId(payload[0]) || !isKnownCommand(payload[3])) {
+    return ProtocolError::InvalidField;
+  }
+  ack.droneNodeId = payload[0];
+  ack.commandSequence = readU16(payload + 1);
+  ack.command = static_cast<MeshCommand>(payload[3]);
+  ack.result = payload[4];
   return ProtocolError::None;
 }
 

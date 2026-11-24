@@ -27,6 +27,18 @@ class TelemetryProvider {
   virtual void update(uint32_t nowMs) = 0;
   virtual bool read(uint32_t nowMs, TelemetryData& telemetry) = 0;
   virtual const char* name() const = 0;
+
+  // Flight-controller commands. Sources without a flight controller keep
+  // these defaults: no command can be sent and no answer ever arrives.
+  virtual bool sendLandCommand(uint8_t confirmation, uint32_t nowMs) {
+    (void)confirmation;
+    (void)nowMs;
+    return false;
+  }
+  virtual bool takeLandAck(uint8_t& result) {
+    (void)result;
+    return false;
+  }
 };
 
 }  // namespace AndyMesh
