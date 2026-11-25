@@ -56,8 +56,13 @@ enum class PacketType : uint8_t {
 };
 
 // Commands the Ground Station can flood through the mesh to the drones.
+//   Land:  land at the current position.
+//   Start: switch to Mission mode, then arm; PX4 flies the uploaded mission.
+//   Kill:  force-disarm immediately. Motors stop, even in the air.
 enum class MeshCommand : uint8_t {
   Land = 1,
+  Start = 2,
+  Kill = 3,
 };
 
 // CommandAck results. Values below 250 are the flight controller's own
@@ -168,6 +173,10 @@ inline const char* meshCommandName(MeshCommand command) {
   switch (command) {
     case MeshCommand::Land:
       return "LAND";
+    case MeshCommand::Start:
+      return "START";
+    case MeshCommand::Kill:
+      return "KILL";
   }
   return "UNKNOWN";
 }

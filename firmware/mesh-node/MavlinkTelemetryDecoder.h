@@ -14,20 +14,22 @@ class MavlinkTelemetryDecoder {
 
   // True while the flight controller's own HEARTBEAT is fresh.
   bool autopilotPresent(uint32_t nowMs) const;
-  // Builds a MAVLink COMMAND_LONG MAV_CMD_NAV_LAND (land at the current
-  // position) addressed to the flight controller. Returns the frame length,
-  // or 0 when no flight controller has been heard.
-  size_t packLandCommand(uint8_t confirmation, uint32_t nowMs, uint8_t* output,
+  // Builds a MAVLink COMMAND_LONG addressed to the flight controller.
+  // Returns the frame length, or 0 when no flight controller has been heard.
+  size_t packCommandLong(uint16_t command, const float params[7],
+                         uint8_t confirmation, uint32_t nowMs, uint8_t* output,
                          size_t outputCapacity);
-  // Reports the flight controller's COMMAND_ACK for NAV_LAND once.
-  bool takeLandAck(uint8_t& result);
+  // Reports, once, the flight controller's latest COMMAND_ACK addressed to
+  // this node.
+  bool takeCommandAck(uint16_t& command, uint8_t& result);
 
  private:
   TelemetryData latest_;
   uint32_t freshnessMs_, positionMs_, altitudeMs_, batteryMs_, speedMs_;
   uint32_t heartbeatMs_, healthMs_, headingMs_, gpsFixMs_, globalPositionMs_;
   uint8_t targetSystem_ = 0, targetComponent_ = 0;
-  bool landAckPending_ = false;
-  uint8_t landAckResult_ = 0;
+  bool ackPending_ = false;
+  uint16_t ackCommand_ = 0;
+  uint8_t ackResult_ = 0;
 };
 }  // namespace AndyMesh

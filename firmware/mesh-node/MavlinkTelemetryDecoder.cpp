@@ -117,12 +117,15 @@ void MavlinkTelemetryDecoder::ingestByte(uint8_t b, uint32_t now) {
       heartbeatMs_ = now;
       break;
     }
+    // Answers addressed to QGroundControl on another link are not ours.
     case MAVLINK_MSG_ID_COMMAND_ACK: {
       mavlink_command_ack_t m;
       mavlink_msg_command_ack_decode(&msg, &m);
-      if (m.command == MAV_CMD_NAV_LAND && msg.sysid == targetSystem_) {
-        landAckResult_ = m.result;
-        landAckPending_ = true;
+      if (msg.sysid == targetSystem_ &&
+          (m.target_system == kMeshSystemId || m.target_system == 0)) {
+        ackCommand_ = m.command;
+        ackResult_ = m.result;
+        ackPending_ = true;
       }
       break;
     }
@@ -256,27 +259,29 @@ bool MavlinkTelemetryDecoder::read(uint32_t now, TelemetryData& out) {
 bool MavlinkTelemetryDecoder::autopilotPresent(uint32_t now) const {
   return fresh(now, heartbeatMs_, freshnessMs_);
 }
-size_t MavlinkTelemetryDecoder::packLandCommand(uint8_t confirmation,
+size_t MavlinkTelemetryDecoder::packCommandLong(uint16_t command,
+                                                const float p[7],
+                                                uint8_t confirmation,
                                                 uint32_t now, uint8_t* out,
                                                 size_t capacity) {
-  if (out == nullptr || capacity < MAVLINK_MAX_PACKET_LEN ||
+  if (out == nullptr || p == nullptr || capacity < MAVLINK_MAX_PACKET_LEN ||
       !autopilotPresent(now))
     return 0;
   const mavlink_channel_t channel = static_cast<mavlink_channel_t>(
       latest_.originatingNodeId % MAVLINK_COMM_NUM_BUFFERS);
   mavlink_message_t msg;
-  // NaN yaw and position mean "keep current heading, land where you are".
   mavlink_msg_command_long_pack_chan(kMeshSystemId, kMeshComponentId, channel,
                                      &msg, targetSystem_, targetComponent_,
-                                     MAV_CMD_NAV_LAND, confirmation, 0, 0, 0,
-                                     NAN, NAN, NAN, NAN);
-  landAckPending_ = false;
+                                     command, confirmation, p[0], p[1], p[2],
+                                     p[3], p[4], p[5], p[6]);
   return mavlink_msg_to_send_buffer(out, &msg);
 }
-bool MavlinkTelemetryDecoder::takeLandAck(uint8_t& result) {
-  if (!landAckPending_) return false;
-  landAckPending_ = false;
-  result = landAckResult_;
+bool MavlinkTelemetryDecoder::takeCommandAck(uint16_t& command,
+                                             uint8_t& result) {
+  if (!ackPending_) return false;
+  ackPending_ = false;
+  command = ackCommand_;
+  result = ackResult_;
   return true;
 }
 #else
@@ -296,10 +301,13 @@ void MavlinkTelemetryDecoder::begin(NodeId, uint32_t) {}
 void MavlinkTelemetryDecoder::ingestByte(uint8_t, uint32_t) {}
 bool MavlinkTelemetryDecoder::read(uint32_t, TelemetryData&) { return false; }
 bool MavlinkTelemetryDecoder::autopilotPresent(uint32_t) const { return false; }
-size_t MavlinkTelemetryDecoder::packLandCommand(uint8_t, uint32_t, uint8_t*,
+size_t MavlinkTelemetryDecoder::packCommandLong(uint16_t, const float[7],
+                                                uint8_t, uint32_t, uint8_t*,
                                                 size_t) {
   return 0;
 }
-bool MavlinkTelemetryDecoder::takeLandAck(uint8_t&) { return false; }
+bool MavlinkTelemetryDecoder::takeCommandAck(uint16_t&, uint8_t&) {
+  return false;
+}
 #endif
 }  // namespace AndyMesh

@@ -16,9 +16,9 @@
     5. Select the next hop toward the Ground Station (Router).
     6. Send telemetry to the next hop and relay telemetry addressed to this
        node from other drones.
-    7. Ground Station: read "LAND <id>" / "LAND ALL" typed in the Serial
+    7. Ground Station: read "LAND|START|KILL <id>|ALL" typed in the Serial
        Monitor (line ending: Newline) and flood the command to the drones.
-    8. Drones: relay flooded commands, pass LAND to the flight controller over
+    8. Drones: relay flooded commands, pass them to the flight controller over
        MAVLink, and route the flight controller's answer back to the ground.
 */
 
@@ -532,14 +532,23 @@ void handleCommandAck(const DecodedPacket& packet, uint32_t nowMs) {
 }
 
 void serviceCommandExecutor(uint32_t nowMs) {
-  uint8_t result = 0;
-  if (commandExecutor.active() && telemetryProvider.takeLandAck(result)) {
-    commandExecutor.finish(result);
+  uint16_t ackCommand = 0;
+  uint8_t ackResult = 0;
+  if (telemetryProvider.takeCommandAck(ackCommand, ackResult)) {
+    Serial.print("[COMMAND] Flight controller answered MAV_CMD ");
+    Serial.print(ackCommand);
+    Serial.print(": ");
+    Serial.println(commandResultName(ackResult));
+    commandExecutor.onFlightControllerAck(ackCommand, ackResult, nowMs);
   }
+  const FlightControllerStep* step = nullptr;
   uint8_t attempt = 0;
-  if (commandExecutor.attemptDue(nowMs, attempt)) {
-    if (telemetryProvider.sendLandCommand(attempt, nowMs)) {
-      Serial.print("[COMMAND] LAND sent to flight controller (try ");
+  if (commandExecutor.attemptDue(nowMs, step, attempt)) {
+    if (telemetryProvider.sendCommandLong(step->command, step->params, attempt,
+                                          nowMs)) {
+      Serial.print("[COMMAND] MAV_CMD ");
+      Serial.print(step->command);
+      Serial.print(" sent to flight controller (try ");
       Serial.print(attempt + 1);
       Serial.println(")");
     } else {
@@ -565,7 +574,8 @@ void serviceCommandExecutor(uint32_t nowMs) {
 }
 
 void printConsoleHelp() {
-  Serial.println("[GROUND] Commands: LAND <drone id>   LAND ALL");
+  Serial.println("[GROUND] Commands: LAND|START|KILL <drone id>   "
+                 "LAND|START|KILL ALL");
 }
 
 void sendGroundCommand(MeshCommand type, NodeId target, uint32_t nowMs) {
@@ -593,7 +603,14 @@ void sendGroundCommand(MeshCommand type, NodeId target, uint32_t nowMs) {
 void runConsoleLine(char* line, uint32_t nowMs) {
   char* word = strtok(line, " \t");
   if (word == nullptr) return;
-  if (strcmp(word, "LAND") != 0) {
+  MeshCommand command;
+  if (strcmp(word, "LAND") == 0) {
+    command = MeshCommand::Land;
+  } else if (strcmp(word, "START") == 0) {
+    command = MeshCommand::Start;
+  } else if (strcmp(word, "KILL") == 0) {
+    command = MeshCommand::Kill;
+  } else {
     printConsoleHelp();
     return;
   }
@@ -603,7 +620,7 @@ void runConsoleLine(char* line, uint32_t nowMs) {
     return;
   }
   if (strcmp(targetText, "ALL") == 0) {
-    sendGroundCommand(MeshCommand::Land, kBroadcastNodeId, nowMs);
+    sendGroundCommand(command, kBroadcastNodeId, nowMs);
     return;
   }
   char* end = nullptr;
@@ -612,7 +629,7 @@ void runConsoleLine(char* line, uint32_t nowMs) {
     Serial.println("[GROUND] Drone ID must be 1-31 or ALL");
     return;
   }
-  sendGroundCommand(MeshCommand::Land, static_cast<NodeId>(id), nowMs);
+  sendGroundCommand(command, static_cast<NodeId>(id), nowMs);
 }
 
 void serviceGroundConsole(uint32_t nowMs) {
