@@ -319,7 +319,8 @@ ProtocolError decodeTelemetryPayload(const uint8_t* payload,
 
 namespace {
 bool isKnownCommand(uint8_t command) {
-  return command == static_cast<uint8_t>(MeshCommand::Land);
+  return command >= static_cast<uint8_t>(MeshCommand::Land) &&
+         command <= static_cast<uint8_t>(MeshCommand::Kill);
 }
 }  // namespace
 

@@ -1,5 +1,6 @@
 // Mesh command tests: Command/CommandAck serialization and validation,
-// command duplicate filtering, and flight-controller retry behavior.
+// command duplicate filtering, LAND/START/KILL step sequences, and
+// flight-controller retry behavior.
 
 #include <assert.h>
 #include <stdio.h>
@@ -104,33 +105,117 @@ void testCommandDuplicateFilter() {
   assert(router.commandAlreadySeen(PacketType::Command, 0, 40));
 }
 
-void testExecutorAcceptedOnFirstTry() {
+void testCommandNamesAndValidation() {
+  uint8_t payload[kCommandPayloadSize];
+  for (uint8_t c = 1; c <= 3; ++c) {
+    const CommandPayload command{0, 1, static_cast<MeshCommand>(c), 1, 5};
+    assert(encodeCommandPayload(command, payload, sizeof(payload)) ==
+           ProtocolError::None);
+  }
+  const CommandPayload unknown{0, 1, static_cast<MeshCommand>(4), 1, 5};
+  assert(encodeCommandPayload(unknown, payload, sizeof(payload)) ==
+         ProtocolError::InvalidField);
+}
+
+void testStepTables() {
+  const FlightControllerStep* steps = nullptr;
+  assert(CommandExecutor::stepsFor(MeshCommand::Land, steps) == 1);
+  assert(steps[0].command == kMavCmdNavLand);
+
+  // START switches to Mission mode before arming.
+  assert(CommandExecutor::stepsFor(MeshCommand::Start, steps) == 2);
+  assert(steps[0].command == kMavCmdDoSetMode);
+  assert(steps[0].params[0] == 1 && steps[0].params[1] == 4 &&
+         steps[0].params[2] == 4);
+  assert(steps[1].command == kMavCmdComponentArmDisarm);
+  assert(steps[1].params[0] == 1);
+
+  // KILL is a forced disarm.
+  assert(CommandExecutor::stepsFor(MeshCommand::Kill, steps) == 1);
+  assert(steps[0].command == kMavCmdComponentArmDisarm);
+  assert(steps[0].params[0] == 0 && steps[0].params[1] == kForceDisarmMagic);
+}
+
+void testLandAcceptedOnFirstTry() {
   CommandExecutor executor;
   executor.begin(2);
   executor.start(MeshCommand::Land, 99, 1000);
+  const FlightControllerStep* step = nullptr;
   uint8_t attempt = 0xFF;
-  assert(executor.attemptDue(1000, attempt) && attempt == 0);
-  assert(!executor.attemptDue(1100, attempt));
-  executor.finish(kCommandResultAccepted);
+  assert(executor.attemptDue(1000, step, attempt) && attempt == 0);
+  assert(step->command == kMavCmdNavLand);
+  assert(!executor.attemptDue(1100, step, attempt));
+  executor.onFlightControllerAck(kMavCmdNavLand, kCommandResultAccepted, 1150);
   assert(!executor.active());
   CommandAckPayload report;
   assert(executor.takeReport(report));
   assert(report.droneNodeId == 2 && report.commandSequence == 99);
+  assert(report.command == MeshCommand::Land);
   assert(report.result == kCommandResultAccepted);
   assert(!executor.takeReport(report));
+}
+
+void testStartRunsBothSteps() {
+  CommandExecutor executor;
+  executor.begin(1);
+  executor.start(MeshCommand::Start, 7, 0);
+  const FlightControllerStep* step = nullptr;
+  uint8_t attempt = 0;
+  assert(executor.attemptDue(0, step, attempt));
+  assert(step->command == kMavCmdDoSetMode);
+  // An answer for a different command does not advance the sequence.
+  executor.onFlightControllerAck(kMavCmdComponentArmDisarm,
+                                 kCommandResultAccepted, 10);
+  assert(executor.active());
+  executor.onFlightControllerAck(kMavCmdDoSetMode, kCommandResultAccepted, 20);
+  assert(executor.active());
+  assert(executor.attemptDue(20, step, attempt) && attempt == 0);
+  assert(step->command == kMavCmdComponentArmDisarm);
+  executor.onFlightControllerAck(kMavCmdComponentArmDisarm,
+                                 kCommandResultAccepted, 30);
+  CommandAckPayload report;
+  assert(executor.takeReport(report));
+  assert(report.command == MeshCommand::Start);
+  assert(report.result == kCommandResultAccepted);
+}
+
+void testStartRefusedModeNeverArms() {
+  CommandExecutor executor;
+  executor.begin(1);
+  executor.start(MeshCommand::Start, 8, 0);
+  const FlightControllerStep* step = nullptr;
+  uint8_t attempt = 0;
+  assert(executor.attemptDue(0, step, attempt));
+  executor.onFlightControllerAck(kMavCmdDoSetMode, 2 /* DENIED */, 10);
+  assert(!executor.active());
+  assert(!executor.attemptDue(1000, step, attempt));
+  CommandAckPayload report;
+  assert(executor.takeReport(report) && report.result == 2);
+}
+
+void testInProgressKeepsWaiting() {
+  CommandExecutor executor;
+  executor.begin(1);
+  executor.start(MeshCommand::Land, 9, 0);
+  const FlightControllerStep* step = nullptr;
+  uint8_t attempt = 0;
+  assert(executor.attemptDue(0, step, attempt));
+  executor.onFlightControllerAck(kMavCmdNavLand, kMavResultInProgress, 10);
+  assert(executor.active());
 }
 
 void testExecutorRetriesThenGivesUp() {
   CommandExecutor executor;
   executor.begin(1);
-  executor.start(MeshCommand::Land, 5, 0);
+  executor.start(MeshCommand::Kill, 5, 0);
+  const FlightControllerStep* step = nullptr;
   uint8_t attempt = 0;
   uint32_t now = 0;
   for (uint8_t i = 0; i < CommandExecutor::kMaxAttempts; ++i) {
-    assert(executor.attemptDue(now, attempt) && attempt == i);
+    assert(executor.attemptDue(now, step, attempt) && attempt == i);
     now += CommandExecutor::kRetryIntervalMs;
   }
-  assert(!executor.attemptDue(now, attempt));
+  assert(!executor.attemptDue(now, step, attempt));
   CommandAckPayload report;
   assert(executor.takeReport(report));
   assert(report.result == kCommandResultNoResponse);
@@ -139,12 +224,14 @@ void testExecutorRetriesThenGivesUp() {
 void testNewerCommandReplacesOld() {
   CommandExecutor executor;
   executor.begin(3);
-  executor.start(MeshCommand::Land, 10, 0);
+  executor.start(MeshCommand::Start, 10, 0);
+  const FlightControllerStep* step = nullptr;
   uint8_t attempt = 0;
-  assert(executor.attemptDue(0, attempt));
+  assert(executor.attemptDue(0, step, attempt));
   executor.start(MeshCommand::Land, 11, 100);
-  assert(executor.attemptDue(100, attempt) && attempt == 0);
-  executor.finish(kCommandResultAccepted);
+  assert(executor.attemptDue(100, step, attempt) && attempt == 0);
+  assert(step->command == kMavCmdNavLand);
+  executor.onFlightControllerAck(kMavCmdNavLand, kCommandResultAccepted, 150);
   CommandAckPayload report;
   assert(executor.takeReport(report) && report.commandSequence == 11);
 }
@@ -157,7 +244,12 @@ int main() {
   testInvalidCommandsRejected();
   testCommandAckRoundTrip();
   testCommandDuplicateFilter();
-  testExecutorAcceptedOnFirstTry();
+  testCommandNamesAndValidation();
+  testStepTables();
+  testLandAcceptedOnFirstTry();
+  testStartRunsBothSteps();
+  testStartRefusedModeNeverArms();
+  testInProgressKeepsWaiting();
   testExecutorRetriesThenGivesUp();
   testNewerCommandReplacesOld();
   puts("command_tests: PASS");

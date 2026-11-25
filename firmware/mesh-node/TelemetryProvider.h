@@ -30,12 +30,16 @@ class TelemetryProvider {
 
   // Flight-controller commands. Sources without a flight controller keep
   // these defaults: no command can be sent and no answer ever arrives.
-  virtual bool sendLandCommand(uint8_t confirmation, uint32_t nowMs) {
+  virtual bool sendCommandLong(uint16_t command, const float params[7],
+                               uint8_t confirmation, uint32_t nowMs) {
+    (void)command;
+    (void)params;
     (void)confirmation;
     (void)nowMs;
     return false;
   }
-  virtual bool takeLandAck(uint8_t& result) {
+  virtual bool takeCommandAck(uint16_t& command, uint8_t& result) {
+    (void)command;
     (void)result;
     return false;
   }

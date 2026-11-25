@@ -89,7 +89,7 @@ struct Node {
   NeighborTable neighbors;
   Router router;
   MavlinkTelemetryDecoder decoder;
-  CommandExecutor executor;          // Drones: LAND -> PX4 with retries.
+  CommandExecutor executor;          // Drones: mesh command -> PX4 steps.
   uint16_t commandSeq = 0;           // Ground Station: last command sent.
   sockaddr_in px4Address{};          // Where this drone's PX4 streams from.
   bool havePx4Address = false;
@@ -173,19 +173,20 @@ struct Node {
       }
     }
   }
-  // Ground Station: flood a LAND command, repeated three times 700 ms apart.
-  void sendLand(NodeId target, uint32_t now) {
-    CommandPayload c{id, target, MeshCommand::Land, ++commandSeq, kMaxHops};
+  // Ground Station: flood a command, repeated three times 700 ms apart.
+  void sendCommand(MeshCommand command, NodeId target, uint32_t now) {
+    CommandPayload c{id, target, command, ++commandSeq, kMaxHops};
     uint8_t p[kCommandPayloadSize];
     if (encodeCommandPayload(c, p, sizeof p) != ProtocolError::None) return;
     for (uint32_t i = 0; i < 3; ++i)
       schedule(now + i * 700, PacketType::Command, kBroadcastNodeId, p,
                sizeof p);
     if (target == kBroadcastNodeId)
-      logEvent("[GROUND] LAND -> ALL drones (cmd %u)", c.commandSequence);
-    else
-      logEvent("[GROUND] LAND -> Drone %u (cmd %u)", target,
+      logEvent("[GROUND] %s -> ALL drones (cmd %u)", meshCommandName(command),
                c.commandSequence);
+    else
+      logEvent("[GROUND] %s -> Drone %u (cmd %u)", meshCommandName(command),
+               target, c.commandSequence);
   }
   void handleCommand(const DecodedPacket& p, uint32_t now) {
     CommandPayload c;
@@ -196,15 +197,16 @@ struct Node {
                                   c.commandSequence))
       return;
     if (c.targetNodeId == id || c.targetNodeId == kBroadcastNodeId) {
-      logEvent("[Node %u] LAND received via Node %u (cmd %u)", id,
-               p.header.sourceNodeId, c.commandSequence);
+      logEvent("[Node %u] %s received via Node %u (cmd %u)", id,
+               meshCommandName(c.command), p.header.sourceNodeId,
+               c.commandSequence);
       executor.start(c.command, c.commandSequence, now);
     }
     if (c.targetNodeId == id || c.hopsRemaining <= 1) return;
     c.hopsRemaining--;
     uint8_t out[kCommandPayloadSize];
     if (encodeCommandPayload(c, out, sizeof out) != ProtocolError::None) return;
-    printf("[Node %u] RELAY LAND command\n", id);
+    printf("[Node %u] RELAY %s command\n", id, meshCommandName(c.command));
     const uint32_t first = now + 30 + static_cast<uint32_t>(rand() % 221);
     for (uint32_t i = 0; i < 2; ++i)
       schedule(first + i * 400, PacketType::Command, kBroadcastNodeId, out,
@@ -218,9 +220,9 @@ struct Node {
                                   a.commandSequence))
       return;
     if (id == kGroundStationId) {
-      logEvent("[GROUND] Drone %u LAND %s (cmd %u, via Node %u)", a.droneNodeId,
-               commandResultName(a.result), a.commandSequence,
-               p.header.sourceNodeId);
+      logEvent("[GROUND] Drone %u %s %s (cmd %u, via Node %u)", a.droneNodeId,
+               meshCommandName(a.command), commandResultName(a.result),
+               a.commandSequence, p.header.sourceNodeId);
       return;
     }
     if (router.hasRoute())
@@ -228,29 +230,34 @@ struct Node {
         schedule(now + i * 400, PacketType::CommandAck, router.nextHop(),
                  p.payload, p.header.payloadLength);
   }
-  // Drone: write MAVLink LAND to this drone's PX4 and report its answer.
+  // Drone: write each MAVLink step to this drone's PX4 and report the result.
   void serviceExecutor(uint32_t now) {
+    uint16_t ackCommand = 0;
     uint8_t result = 0;
-    if (executor.active() && decoder.takeLandAck(result))
-      executor.finish(result);
+    if (decoder.takeCommandAck(ackCommand, result))
+      executor.onFlightControllerAck(ackCommand, result, now);
+    const FlightControllerStep* step = nullptr;
     uint8_t attempt = 0;
-    if (executor.attemptDue(now, attempt)) {
+    if (executor.attemptDue(now, step, attempt)) {
       uint8_t frame[300];
       const size_t length =
-          havePx4Address ? decoder.packLandCommand(attempt, now, frame,
-                                                   sizeof frame)
-                         : 0;
+          havePx4Address
+              ? decoder.packCommandLong(step->command, step->params, attempt,
+                                        now, frame, sizeof frame)
+              : 0;
       if (length == 0 ||
           sendto(udp, frame, length, 0,
                  reinterpret_cast<const sockaddr*>(&px4Address),
                  sizeof px4Address) < 0)
         executor.finish(kCommandResultNoAutopilot);
       else
-        printf("[Node %u] LAND sent to PX4 (try %u)\n", id, attempt + 1);
+        printf("[Node %u] MAV_CMD %u sent to PX4 (try %u)\n", id,
+               step->command, attempt + 1);
     }
     CommandAckPayload report;
     if (!executor.takeReport(report)) return;
-    logEvent("[Node %u] LAND result: %s", id, commandResultName(report.result));
+    logEvent("[Node %u] %s result: %s", id, meshCommandName(report.command),
+             commandResultName(report.result));
     router.commandAlreadySeen(PacketType::CommandAck, report.droneNodeId,
                               report.commandSequence);
     uint8_t p[kCommandAckPayloadSize];
@@ -480,26 +487,33 @@ void writeStatus(const char* path, Node* nodes[], int nodeCount,
 
 // Keyboard, one line at a time:
 //   1-3        turn that node's radio off or on
-//   LAND <n>   Ground Station floods LAND to drone n
-//   LAND ALL   Ground Station floods LAND to every drone
+//   LAND|START|KILL <n>    Ground Station floods the command to drone n
+//   LAND|START|KILL ALL    Ground Station floods it to every drone
 // select() with a zero timeout checks for input without waiting.
 std::string gKeyboardLine;
 void runKeyboardLine(const std::string& line, Node* nodes[], uint32_t now) {
   std::string upper;
   for (char c : line) upper += static_cast<char>(toupper(static_cast<unsigned char>(c)));
-  if (upper.compare(0, 4, "LAND") == 0) {
-    char target[16] = {};
-    if (sscanf(upper.c_str() + 4, " %15s", target) != 1) {
-      puts("Usage: LAND <drone id> | LAND ALL");
-    } else if (strcmp(target, "ALL") == 0) {
-      nodes[0]->sendLand(kBroadcastNodeId, now);
-    } else {
-      int droneId = atoi(target);
-      if (droneId >= 1 && droneId <= 3)
-        nodes[0]->sendLand(static_cast<NodeId>(droneId), now);
-      else
-        puts("Usage: LAND <drone id 1-3> | LAND ALL");
+  char word[8] = {}, target[16] = {};
+  if (sscanf(upper.c_str(), "%7s %15s", word, target) == 2) {
+    MeshCommand command;
+    if (strcmp(word, "LAND") == 0)
+      command = MeshCommand::Land;
+    else if (strcmp(word, "START") == 0)
+      command = MeshCommand::Start;
+    else if (strcmp(word, "KILL") == 0)
+      command = MeshCommand::Kill;
+    else {
+      puts("Usage: LAND|START|KILL <drone id 1-3> | ALL");
+      return;
     }
+    int droneId = atoi(target);
+    if (strcmp(target, "ALL") == 0)
+      nodes[0]->sendCommand(command, kBroadcastNodeId, now);
+    else if (droneId >= 1 && droneId <= 3)
+      nodes[0]->sendCommand(command, static_cast<NodeId>(droneId), now);
+    else
+      puts("Usage: LAND|START|KILL <drone id 1-3> | ALL");
     return;
   }
   for (char c : upper) {

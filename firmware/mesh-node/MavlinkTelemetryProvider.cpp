@@ -32,16 +32,19 @@ bool MavlinkTelemetryProvider::read(uint32_t now, TelemetryData& out) {
 }
 const char* MavlinkTelemetryProvider::name() const { return "MAVLINK_UART"; }
 // Written on the same UART that carries telemetry (ESP32 TX -> PX4 TELEM2 RX).
-bool MavlinkTelemetryProvider::sendLandCommand(uint8_t confirmation,
+bool MavlinkTelemetryProvider::sendCommandLong(uint16_t command,
+                                               const float params[7],
+                                               uint8_t confirmation,
                                                uint32_t now) {
   if (!initialized_) return false;
   uint8_t frame[300];
-  const size_t length =
-      decoder_.packLandCommand(confirmation, now, frame, sizeof(frame));
+  const size_t length = decoder_.packCommandLong(command, params, confirmation,
+                                                 now, frame, sizeof(frame));
   if (length == 0) return false;
   return serial_.write(frame, length) == length;
 }
-bool MavlinkTelemetryProvider::takeLandAck(uint8_t& result) {
-  return initialized_ && decoder_.takeLandAck(result);
+bool MavlinkTelemetryProvider::takeCommandAck(uint16_t& command,
+                                              uint8_t& result) {
+  return initialized_ && decoder_.takeCommandAck(command, result);
 }
 }  // namespace AndyMesh
